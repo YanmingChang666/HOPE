@@ -7,8 +7,11 @@ physics (ball flight, drag, table/net bounce) and the scene layout before traini
 Run inside your Isaac Lab GPU environment after ``source setup_train_env.sh`` (which defines
 ``isaac_py``, the Isaac Python launcher with the working-tree PYTHONPATH):
 
-    # interactive window (default: 1 env, robot free-standing, aerodynamics on)
+    # interactive window (default: 1 env, Agibot A3, robot free-standing, aerodynamics on)
     isaac_py scripts/play_table_tennis.py
+
+    # the Unitree G1 scene instead of the A3
+    isaac_py scripts/play_table_tennis.py --robot g1
 
     # several courts at once
     isaac_py scripts/play_table_tennis.py --num_envs 9
@@ -30,6 +33,8 @@ import argparse
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Visualize the HOPE table-tennis scene.")
+parser.add_argument("--robot", choices=["a3", "g1"], default="a3",
+                    help="Which robot's table-tennis scene to launch (a3 = Agibot A3, g1 = Unitree G1).")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of parallel courts to spawn.")
 parser.add_argument("--fix_base", action="store_true", help="Pin the robot pelvis (stable visualization).")
 parser.add_argument("--disable_aero", action="store_true", help="Disable ball aerodynamic drag.")
@@ -47,18 +52,30 @@ def main() -> None:
     import torch
 
     import whole_body_tracking.tasks  # noqa: F401 -- registers the Gym tasks (import_packages)
-    from whole_body_tracking.tasks.table_tennis.config.agibot_a3.table_tennis_env_cfg import (
-        AgibotA3TableTennisEnvCfg,
-    )
 
-    task_id = "HOPE-TableTennis-AgibotA3-v0"
+    if args_cli.robot == "g1":
+        from whole_body_tracking.tasks.table_tennis.config.unitree_g1.table_tennis_env_cfg import (
+            G1TableTennisEnvCfg as RobotTableTennisEnvCfg,
+        )
 
-    env_cfg = AgibotA3TableTennisEnvCfg()
+        task_id = "HOPE-TableTennis-UnitreeG1-v0"
+    else:
+        from whole_body_tracking.tasks.table_tennis.config.agibot_a3.table_tennis_env_cfg import (
+            AgibotA3TableTennisEnvCfg as RobotTableTennisEnvCfg,
+        )
+
+        task_id = "HOPE-TableTennis-AgibotA3-v0"
+
+    env_cfg = RobotTableTennisEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
     if args_cli.fix_base:
-        env_cfg.scene.robot.spawn.fix_base = True
+        # fix_base is a URDF-spawn (A3) option; the G1 spawns from USD, where it does not apply.
+        if hasattr(env_cfg.scene.robot.spawn, "fix_base"):
+            env_cfg.scene.robot.spawn.fix_base = True
+        else:
+            print("[play_table_tennis] --fix_base is not supported for this spawn type; ignoring.")
     if args_cli.disable_aero:
         env_cfg.ball_aerodynamics.enabled = False
 
