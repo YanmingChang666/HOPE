@@ -18,6 +18,7 @@ Control runs at 50 Hz. Motion clips default to the G1 placeholders under
 
 from __future__ import annotations
 
+import copy
 import os
 
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -64,6 +65,39 @@ def _find_motion_clip(name: str) -> str:
 
 FOREHAND_CLIP = _find_motion_clip("hope_g1_forehand.npz")
 BACKHAND_CLIP = _find_motion_clip("hope_g1_backhand.npz")
+
+
+def _apply_offline_ground(scene) -> None:
+    """Swap the ``plane`` terrain — which downloads a ground-plane USD from the Isaac asset server —
+    for a procedurally-generated flat terrain that needs NO network/assets.
+
+    Opt-in via the ``HOPE_OFFLINE_GROUND`` env var, for machines that cannot reach the remote Isaac
+    asset root (``get_assets_root_path()`` returns a remote URL and the log shows
+    ``[omni.datastore] OmniHub is inaccessible``). The trimesh flat terrain is built in-process and
+    a PreviewSurface visual material is procedural, so nothing is fetched. Physics material is
+    preserved. Default (unset) behavior and the A3 path are unchanged.
+    """
+    import copy
+
+    import isaaclab.sim as sim_utils
+    import isaaclab.terrains as terrain_gen
+
+    terrain = copy.deepcopy(scene.terrain)  # never mutate the shared MySceneCfg default
+    terrain.terrain_type = "generator"
+    terrain.terrain_generator = terrain_gen.TerrainGeneratorCfg(
+        curriculum=False,
+        size=(8.0, 8.0),
+        border_width=0.0,
+        num_rows=1,
+        num_cols=1,
+        horizontal_scale=0.1,
+        vertical_scale=0.005,
+        slope_threshold=0.75,
+        use_cache=False,
+        sub_terrains={"flat": terrain_gen.MeshPlaneTerrainCfg(proportion=1.0)},
+    )
+    terrain.visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.30, 0.30, 0.30))
+    scene.terrain = terrain
 
 
 @configclass
@@ -303,6 +337,12 @@ class G1HOPEPingPongEnvCfg(ManagerBasedRLEnvCfg):
     events: EventCfg = EventCfg()
 
     def __post_init__(self):
+        # Offline fallback: if the Isaac asset server is unreachable, swap the plane terrain (which
+        # downloads a ground USD) for a procedural flat terrain. Opt-in via HOPE_OFFLINE_GROUND=1.
+        # Applied before reading terrain.physics_material below (the swap preserves it).
+        if os.environ.get("HOPE_OFFLINE_GROUND"):
+            _apply_offline_ground(self.scene)
+
         # 50 Hz control (decimation 4 over a 200 Hz physics step).
         self.decimation = 4
         self.episode_length_s = 10.0
