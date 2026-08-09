@@ -15,12 +15,12 @@ INSTALL_REQUIRES = [
     "onnx",
     "onnxscript",
     "pyyaml",
-    # This fork targets Isaac Lab 2.1.0, which pairs with rsl-rl-lib 2.2.x (tuple/tensor obs API).
-    # rsl-rl-lib 3.x switched to a dict obs API + required cfg["obs_groups"], which is INCOMPATIBLE
-    # with IsaacLab 2.1.0's RslRlVecEnvWrapper (it returns a tuple), so pin <3 to keep
-    # `pip install -e` from upgrading rsl_rl and breaking export/play/train. On 2.2.x the
+    # This fork targets Isaac Lab 2.1.0, whose isaaclab_rl pins rsl-rl-lib==2.3.1 (2.x tuple/tensor
+    # obs API). rsl-rl-lib 3.x switched to a dict obs API + required cfg["obs_groups"], which is
+    # INCOMPATIBLE with IsaacLab 2.1.0's RslRlVecEnvWrapper (it returns a tuple), so pin <3 to keep
+    # `pip install -e` from upgrading rsl_rl and breaking export/play/train. On the 2.x line the
     # HOPEOnPolicyRunner._prepare_logging_writer override and obs_groups shim are simply unused
-    # (training then logs via rsl_rl's default TensorBoard writer).
+    # (training then logs via rsl_rl's default TensorBoard writer). 2.2.4 also works.
     "rsl-rl-lib>=2.2.1,<3",
 ]
 
