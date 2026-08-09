@@ -70,7 +70,20 @@ def _run(cfg, simulation_app):
         resume_path = get_checkpoint_path(log_root, ".*", ".*")
     print(f"[play.py] loading checkpoint: {resume_path}", flush=True)
 
-    env = gym.make(task_id, cfg=env_cfg, render_mode=None)
+    # Optional offscreen mp4 recording (works headless — sidesteps the interactive RTX viewer).
+    record_video = bool(cfg.get("video", False))
+    render_mode = "rgb_array" if record_video else None
+    env = gym.make(task_id, cfg=env_cfg, render_mode=render_mode)
+    if record_video:
+        video_dir = os.path.abspath(os.path.join("videos", "play", experiment_name))
+        env = gym.wrappers.RecordVideo(
+            env,
+            video_folder=video_dir,
+            step_trigger=lambda step: step == 0,  # record one clip from the start
+            video_length=int(cfg.video_length),
+            disable_logger=True,
+        )
+        print(f"[play.py] recording video to {video_dir} (length={int(cfg.video_length)} steps)", flush=True)
     env = RslRlVecEnvWrapper(env)
 
     algo = OmegaConf.to_container(cfg.algo, resolve=True)
@@ -83,10 +96,15 @@ def _run(cfg, simulation_app):
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     obs, _ = env.get_observations()
+    step = 0
     while simulation_app.is_running():
         with torch.inference_mode():
             actions = policy(obs)
             obs, _, _, _ = env.step(actions)
+        step += 1
+        # In video mode, stop once the clip is captured so the mp4 finalizes and the script exits.
+        if record_video and step >= int(cfg.video_length) + 2:
+            break
     env.close()
 
 
@@ -98,7 +116,9 @@ def main(cfg):
     sys.argv = sys.argv[:1]
     from isaaclab.app import AppLauncher
 
-    app_launcher = AppLauncher(headless=bool(cfg.headless), device=str(cfg.device))
+    app_launcher = AppLauncher(
+        headless=bool(cfg.headless), device=str(cfg.device), enable_cameras=bool(cfg.get("video", False))
+    )
     simulation_app = app_launcher.app
     try:
         _run(cfg, simulation_app)
