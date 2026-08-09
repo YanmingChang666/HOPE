@@ -293,7 +293,7 @@ def run_eval(args) -> dict:
     scene.reset_stand()
     lifecycle = SwingLifecycle(runtime_cfg.lifecycle)
     source = QueueRacketCommandSource()
-    last_action = np.zeros(31, dtype=np.float64)
+    last_action = np.zeros(len(JOINT_NAMES), dtype=np.float64)
     fixed_station_xy = scene.base_pos_w()[:2].copy()
     max_rest_ticks = max(1, int(round(args.max_rest_seconds / dt)))
     transitions_seen: set = set()
@@ -314,7 +314,7 @@ def run_eval(args) -> dict:
             scene.reset_stand()
             lifecycle = SwingLifecycle(runtime_cfg.lifecycle)
             source = QueueRacketCommandSource()
-            last_action = np.zeros(31, dtype=np.float64)
+            last_action = np.zeros(len(JOINT_NAMES), dtype=np.float64)
             fixed_station_xy = scene.base_pos_w()[:2].copy()
         elif trial > 0:
             # Continuous rally: keep the policy running (no reset, no teleport)
