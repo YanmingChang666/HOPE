@@ -67,12 +67,19 @@ def _repo_root() -> pathlib.Path:
     return here.parents[3]
 
 
-def _reference_pkg_dir(repo_root: pathlib.Path) -> pathlib.Path:
+def _reference_pkg_dir(repo_root: pathlib.Path, robot: str = "a3") -> pathlib.Path:
+    if robot == "g1":
+        return repo_root / "g1_deploy" / "g1_deploy_example" / "reference"
     return repo_root / "a3_deploy" / "a3_deploy_example" / "reference"
 
 
-def _default_runtime_config(repo_root: pathlib.Path) -> pathlib.Path:
-    return repo_root / "a3_deploy" / "a3_deploy_example" / "config" / "hope_pingpong_runtime.yaml"
+def _reference_pkg_name(robot: str = "a3") -> str:
+    return "g1_deploy_onnx_ref_pingpong" if robot == "g1" else "a3_deploy_onnx_ref_pingpong"
+
+
+def _default_runtime_config(repo_root: pathlib.Path, robot: str = "a3") -> pathlib.Path:
+    base = "g1_deploy/g1_deploy_example" if robot == "g1" else "a3_deploy/a3_deploy_example"
+    return repo_root / base / "config" / "hope_pingpong_runtime.yaml"
 
 
 def _load_success_metric(repo_root: pathlib.Path):
@@ -193,19 +200,21 @@ def run_eval(args) -> dict:
 
     # Make the reference deploy package importable (shared 111-D obs / ActionAdapter /
     # lifecycle / RacketCommand / ONNX wrapper).
-    ref_dir = pathlib.Path(args.reference_dir) if args.reference_dir else _reference_pkg_dir(repo_root)
+    import importlib
+
+    robot = getattr(args, "robot", "a3")
+    ref_dir = pathlib.Path(args.reference_dir) if args.reference_dir else _reference_pkg_dir(repo_root, robot)
+    ref_pkg = args.reference_pkg or _reference_pkg_name(robot)
     sys.path.insert(0, str(ref_dir))
-    from a3_deploy_onnx_ref_pingpong.config import RuntimeConfig
-    from a3_deploy_onnx_ref_pingpong.joint_order import HEAD_INDICES, JOINT_NAMES
-    from a3_deploy_onnx_ref_pingpong.lifecycle import SwingLifecycle
-    from a3_deploy_onnx_ref_pingpong.observation import build_observation
-    from a3_deploy_onnx_ref_pingpong.onnx_policy import OnnxPolicy
-    from a3_deploy_onnx_ref_pingpong.racket_command import (
-        BACKHAND,
-        FOREHAND,
-        QueueRacketCommandSource,
-        RacketCommand,
-    )
+    RuntimeConfig = importlib.import_module(f"{ref_pkg}.config").RuntimeConfig
+    _jo = importlib.import_module(f"{ref_pkg}.joint_order")
+    HEAD_INDICES, JOINT_NAMES = _jo.HEAD_INDICES, _jo.JOINT_NAMES
+    SwingLifecycle = importlib.import_module(f"{ref_pkg}.lifecycle").SwingLifecycle
+    build_observation = importlib.import_module(f"{ref_pkg}.observation").build_observation
+    OnnxPolicy = importlib.import_module(f"{ref_pkg}.onnx_policy").OnnxPolicy
+    _rc = importlib.import_module(f"{ref_pkg}.racket_command")
+    BACKHAND, FOREHAND = _rc.BACKHAND, _rc.FOREHAND
+    QueueRacketCommandSource, RacketCommand = _rc.QueueRacketCommandSource, _rc.RacketCommand
 
     # Shared success metric + physics config (pure NumPy; the DEFINITION only -- fed
     # real simulated events here, never an analytic predicted-landing rollout). Loaded
@@ -221,7 +230,7 @@ def run_eval(args) -> dict:
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from mujoco_pingpong_scene import PingPongRealPhysicsScene
 
-    runtime_cfg = RuntimeConfig.load(args.runtime_config or _default_runtime_config(repo_root))
+    runtime_cfg = RuntimeConfig.load(args.runtime_config or _default_runtime_config(repo_root, robot))
     onnx_path = args.onnx or str(runtime_cfg.onnx_path)
     robot_xml = args.model_xml or str(runtime_cfg.model_xml_path)
 
@@ -398,10 +407,15 @@ def run_eval(args) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--onnx", default=None, help="Exported hope_pingpong.onnx (default: from runtime config).")
-    parser.add_argument("--model-xml", default=None, help="a3_pingpong MJCF (default: from runtime config).")
-    parser.add_argument("--runtime-config", default=None, help="hope_pingpong_runtime.yaml (default: shipped).")
+    parser.add_argument("--robot", choices=["a3", "g1"], default="a3",
+                        help="Which robot's deploy contract to evaluate: a3 (111-D, default) or g1 "
+                             "(105-D). Selects the reference package, runtime config, and obs/action dims.")
+    parser.add_argument("--onnx", default=None, help="Exported ONNX policy (default: from runtime config).")
+    parser.add_argument("--model-xml", default=None, help="Robot ping-pong MJCF (default: from runtime config).")
+    parser.add_argument("--runtime-config", default=None, help="hope_pingpong_runtime.yaml (default: per --robot).")
     parser.add_argument("--reference-dir", default=None, help="Dir containing the reference deploy package.")
+    parser.add_argument("--reference-pkg", default=None,
+                        help="Reference package module name (default: per --robot).")
     parser.add_argument("--num-serves", type=int, default=50, help="Number of served balls (denominator).")
     parser.add_argument(
         "--eval-mode", choices=["continuous", "independent"], default="continuous",
