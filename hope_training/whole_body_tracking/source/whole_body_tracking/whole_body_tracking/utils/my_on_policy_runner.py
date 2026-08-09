@@ -57,6 +57,18 @@ class _LocalNullWriter:
 class HOPEOnPolicyRunner(OnPolicyRunner):
     """rsl_rl OnPolicyRunner with local-only, offline logging (no W&B / TensorBoard)."""
 
+    # Newer rsl-rl-lib requires an ``obs_groups`` mapping in the runner cfg (older versions
+    # ignore the extra key). HOPE's env exposes two observation groups: the actor reads
+    # ``policy``; the critic reads the self-contained ``critic`` group (actor terms + privileged
+    # signals). ``runner_kwargs`` does not set this, so inject a default when absent — keeps
+    # train / export / play working across rsl_rl versions without touching every call site.
+    _DEFAULT_OBS_GROUPS = {"policy": ["policy"], "critic": ["critic"]}
+
+    def __init__(self, env, train_cfg, log_dir=None, device="cpu", **kwargs):
+        if isinstance(train_cfg, dict) and "obs_groups" not in train_cfg:
+            train_cfg = {**train_cfg, "obs_groups": dict(self._DEFAULT_OBS_GROUPS)}
+        super().__init__(env, train_cfg, log_dir=log_dir, device=device, **kwargs)
+
     def _prepare_logging_writer(self) -> None:
         if self.log_dir is not None and self.writer is None and not self.disable_logs:
             self.logger_type = "local"
