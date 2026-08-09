@@ -91,6 +91,30 @@ def _fix_racket(root: ET.Element) -> list[str]:
     raise SystemExit(f"racket body '{RACKET_BODY}' not found in the input MJCF")
 
 
+def _add_floor(root: ET.Element) -> str:
+    """Add a ground-plane geom named ``floor`` at z=0.
+
+    The HOPE MuJoCo scene adds a ball<->``floor`` contact pair and assumes the robot MJCF provides
+    the ground (the A3 model has one; this G1 model's floor lives in the external scene file). The
+    robot also needs it to stand on — without it the base falls through the void (a source of the
+    ``NaN in CTRL`` instability). Plain rgba (no texture) to avoid pulling in extra assets.
+    """
+    wb = root.find("worldbody")
+    if wb is None:
+        raise SystemExit("no <worldbody> in the input MJCF")
+    if any(g.get("name") == "floor" for g in root.iter("geom")):
+        return "floor geom already present"
+    floor = ET.Element("geom")
+    floor.set("name", "floor")
+    floor.set("type", "plane")
+    floor.set("size", "300 300 0.125")
+    floor.set("conaffinity", "7")
+    floor.set("friction", "1.5 0.005 0.0001")
+    floor.set("rgba", "0.3 0.3 0.35 1")
+    wb.insert(0, floor)  # first child of <worldbody>, at the world origin (z=0)
+    return "added 'floor' plane geom at z=0"
+
+
 def _add_gyro(root: ET.Element) -> str:
     """Ensure a ``pelvis_imu_gyro`` frameangvel sensor on the pelvis body exists."""
     sensor = root.find("sensor")
@@ -124,6 +148,7 @@ def main() -> int:
     notes = [f"free joint -> {FREE_JOINT_NAME} (was {_rename_free_joint(root)})"]
     notes += _fix_racket(root)
     notes.append(_add_gyro(root))
+    notes.append(_add_floor(root))
 
     tree.write(out_path, encoding="utf-8", xml_declaration=True)
     print(f"[make_g1_mujoco_scene] wrote {out_path}")
