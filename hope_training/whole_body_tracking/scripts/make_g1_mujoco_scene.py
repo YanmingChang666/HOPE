@@ -31,7 +31,12 @@ import argparse
 import pathlib
 import xml.etree.ElementTree as ET
 
-_DEFAULT_IN = "/home/cym/Python_project/TTRL-ICRA2026/Beyondmimic_Deploy_G1/mjmodel.xml"
+# The MuJoCo model matching the trained variant (adapter_short racket + ball-throwing left hand).
+# It is robot-only (floor/light live in the scene file) — exactly what the HOPE scene builder wants.
+_DEFAULT_IN = (
+    "/home/cym/Python_project/TTRL-ICRA2026/Beyondmimic_Deploy_G1/"
+    "g1_with_racket_adapter_short_ball_throwing.xml"
+)
 
 # Names the HOPE MuJoCo scene / deploy bridge look up.
 FREE_JOINT_NAME = "pelvis_free_joint"
