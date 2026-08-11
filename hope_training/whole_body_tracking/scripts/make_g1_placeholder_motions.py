@@ -76,7 +76,7 @@ FPS = 50.0
 NUM_FRAMES = 80
 
 _DEFAULT_URDF = (
-    "/home/TTRL-ICRA2026/legged_lab/assets/unitree_description/urdf/g1/"
+    "/home/cym/Python_project/TTRL-ICRA2026/legged_lab/assets/unitree_description/urdf/g1/"
     "g1_with_racket_adapter_short_ball_throwing.urdf"
 )
 
