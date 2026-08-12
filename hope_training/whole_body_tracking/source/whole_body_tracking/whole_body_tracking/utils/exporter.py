@@ -179,6 +179,10 @@ def export_policy_as_onnx(
         input_names=["observation"],
         output_names=["raw_action"],
         dynamic_axes={"observation": {0: "batch"}, "raw_action": {0: "batch"}},
+        # Use the legacy TorchScript exporter: it honors opset_version=11 and dynamic_axes directly
+        # and emits Cast (not CastLike), so there is no 18->11 down-convert that fails on CastLike.
+        # The default dynamo=True path emits opset-18 ops and only "succeeds" by falling back to 18.
+        dynamo=False,
     )
     return os.path.abspath(onnx_path)
 
