@@ -36,6 +36,13 @@ a3_deploy/URDF/A3*/
 # Machine-local Isaac paths (copied from setup_train_env.local.example.sh)
 hope_training/whole_body_tracking/setup_train_env.local.sh
 
+# Scratch / intermediate motion data (raw mocap + csv_to_npz conversion outputs).
+# These are regenerable; csv_to_npz_with_Interpolation.py writes them to ./motions/.
+# The VERSIONED reference clips live under hope_training/motions/preprocessed/ and stay
+# tracked -- the leading slash anchors this to the repo root so that dir is NOT matched.
+/motions/
+*.bvh
+
 # OS / editor
 .DS_Store
 *.swp
