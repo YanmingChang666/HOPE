@@ -28,7 +28,7 @@ from isaaclab.assets.articulation import ArticulationCfg
 # by relative path) if you relocate it, or set HOPE_G1_USD_PATH. NOTE the space before "_ball".
 ##
 _DEFAULT_G1_USD_PATH = (
-    "/home/TTRL-ICRA2026/legged_lab/assets/unitree_description/urdf/g1/"
+    "/home/cym/Python_project/TTRL-ICRA2026/legged_lab/assets/unitree_description/urdf/g1/"
     "g1_with_racket_adapter_short _ball_throwing/g1_with_racket_adapter_short _ball_throwing.usd"
 )
 G1_USD_PATH = os.environ.get("HOPE_G1_USD_PATH", _DEFAULT_G1_USD_PATH)

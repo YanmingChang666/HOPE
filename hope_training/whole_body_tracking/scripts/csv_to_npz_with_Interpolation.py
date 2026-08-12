@@ -9,7 +9,10 @@
 
 """Launch Isaac Sim Simulator first."""
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# Pin a GPU only if the caller hasn't already chosen one. Hardcoding "1" broke
+# single-GPU machines (the only card is index 0), where CUDA then sees no device
+# and Isaac fails with cudaErrorNoDevice. Override via `CUDA_VISIBLE_DEVICES=...`.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 import argparse
 import numpy as np
 
@@ -32,6 +35,15 @@ parser.add_argument(
     help=(
         "frame range: START END (both inclusive). The frame index starts from 1. If not provided, all frames will be"
         " loaded."
+    ),
+)
+parser.add_argument(
+    "--drop_leading",
+    type=int,
+    default=0,
+    help=(
+        "Drop this many leading rows after loading (before interpolation). Some retargeters inject a fixed"
+        " reference/default frame as row 0 that teleports into the real capture; use --drop_leading 1 to strip it."
     ),
 )
 # append AppLauncher cli args
@@ -92,6 +104,7 @@ class MotionLoader:
         output_fps: int,
         device: torch.device,
         frame_range: tuple[int, int] | None,  # 添加这个参数
+        drop_leading: int = 0,
     ):
         self.motion_file = motion_file
         self.input_fps = input_fps
@@ -101,6 +114,7 @@ class MotionLoader:
         self.current_idx = 0
         self.device = device
         self.frame_range = frame_range  # 保存frame_range
+        self.drop_leading = int(drop_leading)
         self._load_motion()
         self._interpolate_motion_startend(50, 50)  # 首尾插值平滑
         self._interpolate_motion()
@@ -125,6 +139,9 @@ class MotionLoader:
                 )
             )
         motion = motion.to(torch.float32).to(self.device)
+        if self.drop_leading > 0:
+            motion = motion[self.drop_leading:]
+            print(f"Dropped {self.drop_leading} leading row(s); remaining frames: {motion.shape[0]}")
         self.motion_base_poss_input = motion[:, :3]
         self.motion_base_rots_input = motion[:, 3:7]
         self.motion_base_rots_input = self.motion_base_rots_input[:, [3, 0, 1, 2]]  # convert to wxyz
@@ -178,16 +195,16 @@ class MotionLoader:
         base_rot = self.motion_base_rots_input.cpu().numpy()
         dof_pos = self.motion_dof_poss_input.cpu().numpy()
 
-        # 首部插值 - 从默认姿态到第一帧
+        # 首部插值 - 原地起手（不平移/不旋转 base），只让关节从默认站姿过渡到第一帧
         if start_frame > 0:
-            start_base_pos = np.linspace(default_p, base_pos[0], start_frame, endpoint=False)
-            start_base_rot = np.zeros((start_frame, 4))
-            for i in range(start_frame):
-                start_base_rot[i] = quat_slerp(
-                    torch.tensor(default_r, dtype=torch.float32), 
-                    torch.tensor(base_rot[0], dtype=torch.float32), 
-                    i / start_frame
-                ).numpy()
+            # Settle IN PLACE: hold the base at the captured start pose and ease only the joints from
+            # the default stance into the first captured frame. The old code blended the base from a
+            # world-origin default pose (default_p / default_r) to base_pos[0], gliding the robot
+            # ~1.6 m and spinning it ~180° — a non-physical teleport that corrupts the imitation
+            # target. base_pos[0] / base_rot[0] must be the REAL capture start, so strip any injected
+            # reference row first with --drop_leading.
+            start_base_pos = np.tile(base_pos[0], (start_frame, 1))
+            start_base_rot = np.tile(base_rot[0], (start_frame, 1))
             start_dof_pos = np.linspace(default_dof, dof_pos[0], start_frame, endpoint=False)
         else:
             start_base_pos = np.empty((0, 3))
@@ -299,6 +316,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
         output_fps=args_cli.output_fps,
         device=sim.device,
         frame_range=args_cli.frame_range,  # 确保传递这个参数
+        drop_leading=args_cli.drop_leading,
     )
 
     # Extract scene entities
