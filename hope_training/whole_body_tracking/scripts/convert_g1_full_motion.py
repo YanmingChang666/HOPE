@@ -65,7 +65,48 @@ def _index_map(target: list[str], source: list[str], what: str) -> list[int]:
     return [pos[n] for n in target]
 
 
-def convert(src_path: str, dst_path: str) -> None:
+def _quat_mul(a, b):
+    """Hamilton product of wxyz quaternions, broadcasting."""
+    aw, ax, ay, az = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bw, bx, by, bz = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    return np.stack([
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ], axis=-1)
+
+
+def _yaw(q):
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    return np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+
+
+def _reframe(out: dict, strike_phase: float = 0.5) -> tuple[float, np.ndarray]:
+    """Rotate+translate all world body arrays so the pelvis (body 0) sits at the origin facing +x
+    at the strike frame. The HOPE ping-pong task plants the racket target and virtual table in a
+    FIXED env-local +x frame (station = env origin), so a clip captured facing another way / offset
+    makes the paddle swing on the wrong side and the ball is never reached. This applies ONE rigid
+    z-rotation + xy-translation (heading/offset only; joint angles and z are untouched).
+    """
+    bp, bq = out["body_pos_w"], out["body_quat_w"]
+    blv, bav = out["body_lin_vel_w"], out["body_ang_vel_w"]
+    a = int(round(strike_phase * (bp.shape[0] - 1)))
+    yaw_a = float(_yaw(bq[a, 0]))
+    th = -yaw_a
+    cz, sz = np.cos(th), np.sin(th)
+    Rz = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    qz = np.array([np.cos(th / 2), 0.0, 0.0, np.sin(th / 2)], dtype=np.float64)
+    c = bp[a, 0].astype(np.float64).copy()
+    c[2] = 0.0  # translate xy only; keep height
+    out["body_pos_w"] = (((bp - c) @ Rz.T)).astype(np.float32)
+    out["body_quat_w"] = _quat_mul(np.broadcast_to(qz, bq.shape), bq).astype(np.float32)
+    out["body_lin_vel_w"] = (blv @ Rz.T).astype(np.float32)
+    out["body_ang_vel_w"] = (bav @ Rz.T).astype(np.float32)
+    return yaw_a, c
+
+
+def convert(src_path: str, dst_path: str, reframe: bool = True, strike_phase: float = 0.5) -> None:
     data = np.load(src_path, allow_pickle=True)
 
     for k in ("body_names", "joint_names"):
@@ -102,13 +143,25 @@ def convert(src_path: str, dst_path: str) -> None:
         "body_ang_vel_w": data["body_ang_vel_w"][:, body_idx].astype(np.float32),
     }
 
+    reframe_note = ""
+    if reframe:
+        yaw_a, c = _reframe(out, strike_phase)
+        a = int(round(strike_phase * (out["body_pos_w"].shape[0] - 1)))
+        paddle = out["body_pos_w"][a, 13]  # right_wrist_yaw_link, world, after re-framing
+        reframe_note = (
+            f"\n    reframed: strike-frame pelvis -> origin +x "
+            f"(was yaw {np.degrees(yaw_a):+.0f} deg, xy ({c[0]:+.2f},{c[1]:+.2f}))"
+            f"\n    paddle @strike now at world ({paddle[0]:+.2f},{paddle[1]:+.2f},{paddle[2]:.2f}) "
+            f"| task target box ~ x[0.45,0.55] z[0.7,1.1]"
+        )
+
     dst = pathlib.Path(dst_path)
     dst.parent.mkdir(parents=True, exist_ok=True)
     np.savez(dst, **out)
     print(
         f"[convert_g1_full_motion] {os.path.basename(src_path)} -> {dst}\n"
         f"    frames {out['joint_pos'].shape[0]}, joints {out['joint_pos'].shape[1]}, "
-        f"bodies {out['body_pos_w'].shape[1]}, fps {fps:g}"
+        f"bodies {out['body_pos_w'].shape[1]}, fps {fps:g}{reframe_note}"
     )
 
 
@@ -116,10 +169,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--in", dest="src", required=True, help="Raw BeyondMimic export .npz (30-body).")
     ap.add_argument("--out", dest="dst", required=True, help="HOPE-schema .npz to write (14-body).")
+    ap.add_argument("--no-reframe", dest="reframe", action="store_false",
+                    help="Skip the +x/origin re-framing (keep the clip's captured world frame).")
+    ap.add_argument("--strike-phase", type=float, default=0.5,
+                    help="Clip phase (0..1) whose pelvis pose is placed at origin+x when re-framing.")
     args = ap.parse_args()
     if not os.path.isfile(args.src):
         raise FileNotFoundError(f"Input not found: {args.src}")
-    convert(args.src, args.dst)
+    convert(args.src, args.dst, reframe=args.reframe, strike_phase=args.strike_phase)
     return 0
 
 
