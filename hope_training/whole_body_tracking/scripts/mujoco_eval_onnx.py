@@ -195,6 +195,83 @@ def _predict_command(ball_pos, ball_vel, side, scene, physics, args, task_id, re
     )
 
 
+def _robot_from_onnx(onnx_path: str) -> str | None:
+    """Infer the robot from the exported policy's observation width (G1=105, A3=111)."""
+    try:
+        import onnxruntime as ort
+
+        sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        shape = sess.get_inputs()[0].shape
+        last = shape[-1] if shape else None
+        if last == 105:
+            return "g1"
+        if last == 111:
+            return "a3"
+    except Exception:
+        return None
+    return None
+
+
+class _CsvLogger:
+    """Per-policy-tick CSV recorder for post-hoc fall analysis (base pose/tilt, joints, actions)."""
+
+    def __init__(self, path: str, joint_names, dt: float):
+        import csv
+
+        self._f = open(path, "w", newline="")
+        self._w = csv.writer(self._f)
+        self._jn = list(joint_names)
+        self._dt = float(dt)
+        self._step = 0
+        self._serve = 0
+        self._side = ""
+        meta = ["step", "time_s", "serve", "side", "phase", "base_z",
+                "roll_deg", "pitch_deg", "yaw_deg", "angvel_x", "angvel_y", "angvel_z",
+                "qd_absmax", "act_absmax", "act_argmax_joint", "qdes_absmax",
+                "nan", "fallen", "ball_x", "ball_y", "ball_z"]
+        self._w.writerow(meta
+                         + [f"q:{n}" for n in self._jn]
+                         + [f"qd:{n}" for n in self._jn]
+                         + [f"act:{n}" for n in self._jn])
+
+    def set_context(self, serve: int, side: str):
+        self._serve, self._side = serve, side
+
+    def log(self, state, applied_action, q_des, phase, ball_pos):
+        q = np.asarray(state.q, float); qd = np.asarray(state.qd, float)
+        bp = np.asarray(state.base_pos_w, float); bq = np.asarray(state.base_quat_w, float)
+        av = np.asarray(state.base_ang_vel_b, float)
+        act = np.asarray(applied_action, float); qdes = np.asarray(q_des, float)
+        w, x, y, z = bq
+        roll = np.degrees(np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)))
+        pitch = np.degrees(np.arcsin(np.clip(2 * (w * y - z * x), -1.0, 1.0)))
+        yaw = np.degrees(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
+
+        def mx(a):
+            a = np.asarray(a, float)
+            return float(np.max(np.abs(a))) if np.all(np.isfinite(a)) else float("nan")
+
+        finite_act = np.all(np.isfinite(act))
+        ai = int(np.argmax(np.abs(act))) if finite_act else -1
+        all_finite = (np.all(np.isfinite(q)) and np.all(np.isfinite(qd))
+                      and finite_act and np.all(np.isfinite(bp)))
+        row = [self._step, round(self._step * self._dt, 4), self._serve, self._side, phase,
+               round(float(bp[2]), 4), round(float(roll), 2), round(float(pitch), 2), round(float(yaw), 2),
+               round(float(av[0]), 3), round(float(av[1]), 3), round(float(av[2]), 3),
+               round(mx(qd), 3), round(mx(act), 3), (self._jn[ai] if ai >= 0 else ""), round(mx(qdes), 3),
+               int(not all_finite), int(bool(np.isfinite(bp[2]) and bp[2] < 0.4)),
+               round(float(ball_pos[0]), 3), round(float(ball_pos[1]), 3), round(float(ball_pos[2]), 3)]
+        row += [round(float(v), 4) for v in q]
+        row += [round(float(v), 4) for v in qd]
+        row += [round(float(v), 4) for v in act]
+        self._w.writerow(row)
+        self._f.flush()
+        self._step += 1
+
+    def close(self):
+        self._f.close()
+
+
 def run_eval(args) -> dict:
     repo_root = _repo_root()
 
@@ -203,6 +280,14 @@ def run_eval(args) -> dict:
     import importlib
 
     robot = getattr(args, "robot", "a3")
+    # The ONNX obs width is ground truth (G1=105, A3=111): auto-correct a mismatched/omitted --robot
+    # so `--robot g1` is no longer required for a G1 policy.
+    if args.onnx:
+        detected = _robot_from_onnx(args.onnx)
+        if detected and detected != robot:
+            print(f"[mujoco_eval] auto-detected robot='{detected}' from ONNX obs dim "
+                  f"(overriding --robot {robot}).")
+            robot = detected
     ref_dir = pathlib.Path(args.reference_dir) if args.reference_dir else _reference_pkg_dir(repo_root, robot)
     ref_pkg = args.reference_pkg or _reference_pkg_name(robot)
     sys.path.insert(0, str(ref_dir))
@@ -258,6 +343,7 @@ def run_eval(args) -> dict:
     max_ticks = max(1, int(round(args.max_trial_seconds / dt)))
     rng = np.random.default_rng(args.seed)
     continuous = args.eval_mode == "continuous"
+    csv_log = _CsvLogger(args.csv_out, JOINT_NAMES, dt) if getattr(args, "csv_out", None) else None
 
     def _policy_tick(lifecycle, source, last_action, fixed_station_xy):
         """One 50 Hz policy step (identical to the deploy runner's tick).
@@ -278,7 +364,10 @@ def run_eval(args) -> dict:
         if runtime_cfg.passive_neck:
             q_des[head_idx] = default_q[head_idx]
         scene.write_targets(q_des, kp, kd)
-        return scene.step(), applied_action
+        result = scene.step()
+        if csv_log is not None:
+            csv_log.log(state, applied_action, q_des, lifecycle.phase.value, scene.ball_state()[0])
+        return result, applied_action
 
     def _park_ball():
         """Drop the ball out of play (past the far edge) between rally serves."""
@@ -307,6 +396,8 @@ def run_eval(args) -> dict:
         if prev_side is not None:
             transitions_seen.add((prev_side, side))
         prev_side = side
+        if csv_log is not None:
+            csv_log.set_context(trial + 1, "FH" if side == FOREHAND else "BH")
         _strike_pt, serve_pos, serve_vel = _sample_serve(rng, side, scene, physics, args)
 
         if not continuous:
@@ -388,6 +479,9 @@ def run_eval(args) -> dict:
         accumulator.add_bool(success)
 
     scene.close()
+    if csv_log is not None:
+        csv_log.close()
+        print(f"[mujoco_eval] wrote per-tick log: {args.csv_out}", file=sys.stderr)
     if continuous:
         _names = {FOREHAND: "FH", BACKHAND: "BH"}
         seen = sorted(f"{_names[a]}->{_names[b]}" for a, b in transitions_seen)
@@ -442,6 +536,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for the example serve distribution.")
     parser.add_argument("--view", action="store_true", help="Launch the MuJoCo passive viewer (debug only).")
+    parser.add_argument("--csv-out", default=None,
+                        help="Write a per-policy-tick CSV (base height/tilt/angvel, joint q/qd, actions, "
+                             "NaN & fallen flags, ball xyz) for fall analysis.")
     parser.add_argument("--json-out", default=None, help="Also write {'success_rate': ...} to this file.")
     return parser.parse_args()
 
