@@ -225,7 +225,7 @@ class _CsvLogger:
         self._step = 0
         self._serve = 0
         self._side = ""
-        meta = ["step", "time_s", "serve", "side", "phase", "base_z",
+        meta = ["step", "time_s", "serve", "side", "phase", "base_x", "base_y", "base_z",
                 "roll_deg", "pitch_deg", "yaw_deg", "angvel_x", "angvel_y", "angvel_z",
                 "qd_absmax", "act_absmax", "act_argmax_joint", "qdes_absmax",
                 "nan", "fallen", "ball_x", "ball_y", "ball_z"]
@@ -256,7 +256,8 @@ class _CsvLogger:
         all_finite = (np.all(np.isfinite(q)) and np.all(np.isfinite(qd))
                       and finite_act and np.all(np.isfinite(bp)))
         row = [self._step, round(self._step * self._dt, 4), self._serve, self._side, phase,
-               round(float(bp[2]), 4), round(float(roll), 2), round(float(pitch), 2), round(float(yaw), 2),
+               round(float(bp[0]), 4), round(float(bp[1]), 4), round(float(bp[2]), 4),
+               round(float(roll), 2), round(float(pitch), 2), round(float(yaw), 2),
                round(float(av[0]), 3), round(float(av[1]), 3), round(float(av[2]), 3),
                round(mx(qd), 3), round(mx(act), 3), (self._jn[ai] if ai >= 0 else ""), round(mx(qdes), 3),
                int(not all_finite), int(bool(np.isfinite(bp[2]) and bp[2] < 0.4)),
