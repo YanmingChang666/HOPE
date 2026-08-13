@@ -135,13 +135,17 @@ class CommandsCfg:
         mount_quat=G1_MOUNT_QUAT,
         mount_normal_axis=G1_MOUNT_NORMAL_AXIS,          # racket-local blade face
         mount_normal_sign_per_clip=(1.0, -1.0),          # forehand/backhand strike with opposite faces
-        strike_phase_per_clip=(0.5, 0.5),                # placeholder clips strike mid-clip
+        # TTRL frame: robot 0.23 m behind the near edge (pelvis at world x=-1.6, table centre at 0),
+        # so the net lands at 0.23 + net_x(1.37) = 1.6 m in front of the station.
+        table_near_x=0.23,
+        strike_phase_per_clip=(0.47, 0.27),              # measured strike frames of the retargeted clips (FH ~0.47, BH ~0.27)
         strike_window_s=0.12,
-        # STATION-RELATIVE racket target boxes (x forward reach, y swing-side band, z absolute height).
-        # Example values — tune to your own clips' natural strike points.
+        # STATION-RELATIVE racket target boxes, retuned to the retargeted G1 clips' MEASURED strike
+        # apex (forehand ~(0.35,-0.08,0.97), backhand ~(0.18,-0.13,0.86)).
+        # NOTE: both clips strike on the -y side -- verify the backhand clip is not mislabeled.
         racket_pos_range_per_clip=(
-            ((0.45, 0.55), (-0.55, -0.15), (0.70, 1.00)),  # forehand (paddle on the -y side)
-            ((0.45, 0.55), (0.15, 0.55), (0.85, 1.15)),    # backhand (+y side)
+            ((0.28, 0.42), (-0.20, 0.05), (0.88, 1.05)),  # forehand
+            ((0.10, 0.30), (-0.25, 0.00), (0.78, 0.95)),  # backhand
         ),
         racket_vel_range_per_clip=(
             ((1.0, 2.0), (0.5, 1.5), (0.2, 1.0)),    # forehand
