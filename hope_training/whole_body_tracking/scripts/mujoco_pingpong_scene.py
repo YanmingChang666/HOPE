@@ -105,6 +105,7 @@ class PingPongRealPhysicsScene:
         joint_names,
         control_dt: float = 0.02,
         near_edge_x: float = 0.30,
+        default_q=None,
         launch_viewer: bool = False,
     ) -> None:
         import mujoco  # lazy import so the module imports without MuJoCo present
@@ -113,6 +114,10 @@ class PingPongRealPhysicsScene:
         self.control_dt = float(control_dt)
         self.joint_names = list(joint_names)
         self.num_joints = len(self.joint_names)
+        # Ready-stance joint angles (in ``joint_names`` order) used to seat the robot when the model
+        # ships no stand keyframe -- otherwise mj_resetData leaves every joint at 0 (straight legs),
+        # which is far outside the policy's distribution and collapses immediately.
+        self._default_q = np.asarray(default_q, dtype=np.float64) if default_q is not None else None
 
         # --- geometry from the shared ball-physics config -----------------------
         g = float(ball_cfg.get("gravity", 9.81))
@@ -293,6 +298,11 @@ class PingPongRealPhysicsScene:
         else:
             self._mj.mj_resetData(m, d)
         d.xfrc_applied[:] = 0.0
+        # No stand keyframe -> mj_resetData left every joint at 0 (straight legs, out of the policy's
+        # distribution). Seat the ready stance so the robot starts where it was trained to.
+        if m.nkey == 0 and self._default_q is not None:
+            d.qpos[self._q_adr] = self._default_q
+            d.qvel[self._v_adr] = 0.0
         # Park the ball out of play until a serve is set.
         d.qpos[self._ball_qadr:self._ball_qadr + 3] = [self.near_edge_x + self.length / 2.0, 0.0, self.table_height + 1.0]
         d.qpos[self._ball_qadr + 3:self._ball_qadr + 7] = [1.0, 0.0, 0.0, 0.0]

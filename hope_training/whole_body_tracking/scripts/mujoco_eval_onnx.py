@@ -331,6 +331,7 @@ def run_eval(args) -> dict:
         JOINT_NAMES,
         control_dt=runtime_cfg.control_dt,
         near_edge_x=args.near_edge_x,
+        default_q=runtime_cfg.action_adapter.default_q,
         launch_viewer=args.view,
     )
 
