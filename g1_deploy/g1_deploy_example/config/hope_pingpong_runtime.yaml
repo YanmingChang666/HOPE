@@ -28,15 +28,36 @@ simulation:
   # follow-up. Point --model-xml at your G1 MJCF (e.g. adapted from
   # TTRL-ICRA2026/Beyondmimic_Deploy_G1/mjmodel.xml) to run the in-process sim.
   model_xml_path: ../models/g1_pingpong.xml
-  # EXAMPLE simulation PD gains used by the MuJoCo bridge to realize joint-position
-  # targets on the model's torque actuators. These are NOT vendor deploy gains --
-  # they only exist so the reference runs against the sim; tune for your robot.
+  # Simulation PD gains for the MuJoCo bridge. These MATCH the Isaac training actuator
+  # stiffness/damping (robots/g1.py: 7520/5020/4010 motor models) so the deployed policy
+  # sees the same joint dynamics it trained under. A flat kp=200 (the old placeholder) is
+  # 2-7x too stiff and makes the robot over-torque and topple during the swing.
+  # Group values are the default for each group; per_joint overrides the members whose
+  # Isaac gain differs within the group (ankle/knee/hip_roll, waist_roll/pitch, wrist_pitch/yaw).
   # NOTE: no 'neck' group (the G1 has no head).
   pd_gains:
     groups:
-      waist: {kp: 200.0, kd: 5.0}
-      arm:   {kp: 40.0,  kd: 2.0}
-      leg:   {kp: 200.0, kd: 5.0}
+      waist: {kp: 40.18, kd: 2.56}   # waist_yaw (7520_14); waist_roll/pitch overridden below
+      arm:   {kp: 14.25, kd: 0.91}   # shoulder/elbow/wrist_roll (5020); wrist_pitch/yaw overridden
+      leg:   {kp: 40.18, kd: 2.56}   # hip_pitch/hip_yaw (7520_14); hip_roll/knee/ankle overridden
+    per_joint:
+      # legs: hip_roll + knee are 7520_22 (stiffer); ankles are dual-5020 (soft, critical for balance)
+      left_hip_roll_joint:   {kp: 99.10, kd: 6.31}
+      right_hip_roll_joint:  {kp: 99.10, kd: 6.31}
+      left_knee_joint:       {kp: 99.10, kd: 6.31}
+      right_knee_joint:      {kp: 99.10, kd: 6.31}
+      left_ankle_pitch_joint:  {kp: 28.50, kd: 1.81}
+      right_ankle_pitch_joint: {kp: 28.50, kd: 1.81}
+      left_ankle_roll_joint:   {kp: 28.50, kd: 1.81}
+      right_ankle_roll_joint:  {kp: 28.50, kd: 1.81}
+      # waist roll/pitch are dual-5020
+      waist_roll_joint:  {kp: 28.50, kd: 1.81}
+      waist_pitch_joint: {kp: 28.50, kd: 1.81}
+      # wrists pitch/yaw are 4010
+      left_wrist_pitch_joint:  {kp: 16.78, kd: 1.07}
+      right_wrist_pitch_joint: {kp: 16.78, kd: 1.07}
+      left_wrist_yaw_joint:    {kp: 16.78, kd: 1.07}
+      right_wrist_yaw_joint:   {kp: 16.78, kd: 1.07}
 
 lifecycle:
   # Example continuous-rally timing (ready -> swing -> follow-through -> recovery).

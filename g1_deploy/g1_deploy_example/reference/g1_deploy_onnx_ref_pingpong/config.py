@@ -123,4 +123,15 @@ def _expand_pd_gains(spec: dict) -> tuple[np.ndarray, np.ndarray]:
             i = NAME_TO_INDEX[jn]
             kp[i] = float(g["kp"])
             kd[i] = float(g["kd"])
+    # Exact per-joint overrides (applied after the coarse groups). Needed to match the Isaac
+    # training stiffness/damping, which differs WITHIN a group -- e.g. ankle (28.5) vs knee (99)
+    # both live in "leg". A gain mismatch here makes the deployed policy over-torque and fall.
+    for jn, g in (spec.get("per_joint") or {}).items():
+        if jn not in NAME_TO_INDEX:
+            raise ValueError(f"simulation.pd_gains.per_joint has unknown joint '{jn}'")
+        i = NAME_TO_INDEX[jn]
+        if "kp" in g:
+            kp[i] = float(g["kp"])
+        if "kd" in g:
+            kd[i] = float(g["kd"])
     return kp, kd
