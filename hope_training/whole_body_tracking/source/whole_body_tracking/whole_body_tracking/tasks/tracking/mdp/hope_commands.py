@@ -364,6 +364,11 @@ class RacketTargetCommand(CommandTerm):
         if debug_vis:
             if not hasattr(self, "_contact_visualizer"):
                 self._contact_visualizer = VisualizationMarkers(self.cfg.contact_visualizer_cfg)
+                # 【中文·诊断】这行日志用来确认“可视化代码确实被加载并启用了”。
+                # 启动训练后若在控制台看到它 => 代码已生效，看不到球多半是遮挡/颜色/相机问题；
+                # 若始终看不到它 => 说明这份改动没被这台机器 import 到（多为：训练机还是旧代码，
+                # 或包不是 editable 安装 -> 需要 git 同步到训练机并 `pip install -e` 重新安装）。
+                print("[RacketTargetCommand] debug_vis ON -> 已创建黑色击球点小球 marker", flush=True)
             self._contact_visualizer.set_visibility(True)
         elif hasattr(self, "_contact_visualizer"):
             self._contact_visualizer.set_visibility(False)
@@ -375,6 +380,12 @@ class RacketTargetCommand(CommandTerm):
         # racket_pos_w 形状 (num_envs, 3)，每个并行环境各画一个球。
         if not self.robot.is_initialized:
             return
+        # 【中文·诊断】只在第一次真正绘制时打印一次拍心坐标（env 0），确认坐标合理（不是 0,0,0）。
+        if not getattr(self, "_contact_vis_logged", False):
+            p0 = self.racket_pos_w[0].tolist()
+            print(f"[RacketTargetCommand] 首帧绘制黑球 @ 拍心 env0 = "
+                  f"({p0[0]:.3f}, {p0[1]:.3f}, {p0[2]:.3f})  (若为 0,0,0 说明 FK 尚未更新)", flush=True)
+            self._contact_vis_logged = True
         self._contact_visualizer.visualize(self.racket_pos_w)
 
 
