@@ -26,8 +26,10 @@ from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
+import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_mul, sample_uniform
 
@@ -274,15 +276,23 @@ class RacketTargetCommand(CommandTerm):
         outgoing flight is a gravity-only ballistic arc; net clearance and the first table bounce are
         solved in closed form. All quantities are example approximations for training shaping.
         """
-        exact = self.time_to_strike.abs() <= (0.5 * self._env.step_dt + 1e-6)
+        # 【中文 —— ball_contact（击球接触）到底怎么判定的】
+        # 注意：训练环境里没有真实刚体球（tracking 任务用解析式无旋出球评估），所以 ball_contact
+        # 不是物理碰撞，而是“在恰好击球的那一帧，球拍是否又近又对着目标冲过去”的一次性判定：
+        #   1) exact    —— 参考时钟 time_to_strike 恰好过 0（落在半个控制步内），即“击球帧”；
+        #   2) pos_err  —— 实际拍心 racket_pos_w（FK 得到）到采样目标 racket_target_pos_w 的距离；
+        #   3) approach —— 拍的世界速度在“指向目标方向”上的分量，即接近速度；
+        #   contact = 击球帧 且 距离<contact_radius(0.095m=拍半径+球半径) 且 接近速度>min_approach_speed(0.3m/s)
+        exact = self.time_to_strike.abs() <= (0.5 * self._env.step_dt + 1e-6)   # 是否恰好在击球帧
         self.strike_fired = exact
 
-        pos_err = torch.norm(self.racket_pos_w - self.racket_target_pos_w, dim=-1)
+        pos_err = torch.norm(self.racket_pos_w - self.racket_target_pos_w, dim=-1)  # 实际拍心↔目标 距离
         self.racket_target_distance = pos_err
         # contact requires the racket to be near the target AND moving toward it.
+        # 【中文】必须“够近”且“正朝目标运动”才算接触——避免拍只是路过目标点也误判为击中。
         to_target = self.racket_target_pos_w - self.racket_pos_w
         to_target_dir = to_target / (torch.norm(to_target, dim=-1, keepdim=True) + 1e-6)
-        approach = torch.sum(self.racket_lin_vel_w * to_target_dir, dim=-1)
+        approach = torch.sum(self.racket_lin_vel_w * to_target_dir, dim=-1)          # 朝目标的接近速度
         contact = exact & (pos_err < self.cfg.contact_radius) & (approach > self.cfg.min_approach_speed)
 
         # Outgoing ballistic arc from the strike point (env-local frame) at the racket velocity.
@@ -344,11 +354,28 @@ class RacketTargetCommand(CommandTerm):
         if len(wrapped) > 0:
             self._resample_command(wrapped)
 
+    # --- debug visualization: a black sphere at the ACTUAL racket contact point ---------------- #
     def _set_debug_vis_impl(self, debug_vis: bool):
-        pass
+        # 【中文 —— 在球拍接触点画黑色小球】
+        # 打开开关时创建/显示一个球形 marker，关闭时隐藏。marker 只在有渲染窗口时可见：
+        #   * play.py / train.py 带 GUI 时能看到；
+        #   * headless（无头）训练不渲染，画了也看不到（但不会报错、不影响训练）。
+        # 需要在 env cfg 里把 racket_target 的 debug_vis 设为 True 才会触发这里。
+        if debug_vis:
+            if not hasattr(self, "_contact_visualizer"):
+                self._contact_visualizer = VisualizationMarkers(self.cfg.contact_visualizer_cfg)
+            self._contact_visualizer.set_visibility(True)
+        elif hasattr(self, "_contact_visualizer"):
+            self._contact_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        pass
+        # 【中文】每个渲染帧把黑球移动到“当前实际拍心” racket_pos_w（由 _compute_racket_state 的
+        # 前向运动学算出的拍面中心，世界系坐标）。它逐帧跟随球拍，击球那一刻它所在的位置就是击球点，
+        # 从而可以直接肉眼对比“拍心实际到了哪” vs “采样的击球目标 racket_target_pos_w 在哪”。
+        # racket_pos_w 形状 (num_envs, 3)，每个并行环境各画一个球。
+        if not self.robot.is_initialized:
+            return
+        self._contact_visualizer.visualize(self.racket_pos_w)
 
 
 def _boxes_to_tensor(per_clip, device):
@@ -402,6 +429,19 @@ class RacketTargetCommandCfg(CommandTermCfg):
     # Optional per-clip boxes (indexed by clip_id 0=forehand, 1=backhand). None -> shared boxes above.
     racket_pos_range_per_clip: tuple | None = None
     racket_vel_range_per_clip: tuple | None = None
+
+    # --- debug visualization: black sphere drawn at the ACTUAL racket contact point (racket_pos_w) ---
+    # 【中文】击球点可视化用的黑色小球配置。半径 0.025m（比真实乒乓球 0.02 略大，便于看清）；
+    # 颜色 (0,0,0)=纯黑。只有把上面 debug_vis 设为 True 时才会创建/显示。
+    contact_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/Command/racket_contact",
+        markers={
+            "contact": sim_utils.SphereCfg(
+                radius=0.025,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),
+            ),
+        },
+    )
 
     # --- no-spin return evaluation (example table placement in the env frame; tune to your scene) ---
     contact_radius: float = 0.095   # racket radius + ball radius

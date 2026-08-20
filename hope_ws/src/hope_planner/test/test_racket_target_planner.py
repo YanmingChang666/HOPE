@@ -1,5 +1,10 @@
 """Racket target planner unit tests (constant paddle restitution, no-spin)."""
 
+# 【中文说明】球拍目标规划器单元测试：验证 ①来球能解出有限(非 NaN/Inf)的球拍位置/速度、
+#   ②球拍面法向是单位向量、③法向朝对手(+x 分量>0)、④退化输入(Δv≈0/纯横向/反向)仍朝对手、
+#   ⑤带阻力反解出的出射速度积分后能落到目标点附近、⑥恢复系数恒等式自洽
+#   (v_o_n - v_r_n = -C_r(v_i_n - v_r_n))。
+
 import numpy as np
 
 from hope_planner.ball_trajectory_predictor import StrikeTarget

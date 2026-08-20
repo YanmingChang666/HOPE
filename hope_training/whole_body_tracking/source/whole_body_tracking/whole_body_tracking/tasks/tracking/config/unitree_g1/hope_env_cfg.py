@@ -125,7 +125,9 @@ class CommandsCfg:
     racket_target = mdp.RacketTargetCommandCfg(
         asset_name="robot",
         motion_command_name="motion",
-        debug_vis=False,
+        # 【中文】True = 在实际球拍接触点(racket_pos_w)画一个黑色小球，方便在 play/GUI 里看击球点。
+        # 只在有渲染窗口时可见；headless 训练看不到但无害。不想看时改回 False 即可。
+        debug_vis=True,
         # G1 racket mount FK (paddle on the right wrist). Set explicitly — the racket link may merge
         # into the wrist under USD import, so the FK falls back to (wrist pose) * (mount offset).
         # mount_offset / mount_quat are SEEDS from the URDF joint; tune in the viewer.

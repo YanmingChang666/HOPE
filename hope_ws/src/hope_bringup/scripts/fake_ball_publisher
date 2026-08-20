@@ -11,6 +11,18 @@ physics (configs/ball_physics.yaml) so the planner's predictions track the
 simulated ball. Positions are in the table frame (z = 0 at the table surface).
 """
 
+# =============================================================================
+# 【中文说明】合成球发布器：无动捕时用它发 /poses，做规划器/整链路冒烟测试
+# -----------------------------------------------------------------------------
+#   以 rate_hz 发布 /poses(PoseArray，球在 index 0)，用与规划器同一套“二次阻力+桌面弹跳”
+#   物理正向仿真一次次发球（默认在正手/反手两种发球间交替，也可用 serves 给出扫描序列）。
+#   重要：这里的 drag_k / restitution_* / ball_radius 必须与规划器的 ball_physics.yaml 一致，
+#         否则规划器的预测追不上仿真球，测出的行为不可信。
+#   坐标系：桌面系，z=0 为桌面；球“心”落到 z=ball_radius 视为触桌反弹（与预测器约定一致）。
+#   结束条件：球越过机器人(end_x)、掉到地面以下、或飞行超时 → 暂停 pause_s 后发下一球；
+#             max_serves>0 时发满该数量即空转停止。
+# =============================================================================
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray
@@ -42,6 +54,7 @@ class FakeBallPublisher(Node):
         self.declare_parameter("max_serves", 0)
         self.declare_parameter("frame_id", "world")
 
+        # 发球序列：若 serves 参数给了 N*6 的扁平列表则按它循环；否则退回“正手/反手”两球交替。
         gp = self.get_parameter
         sweep = [float(v) for v in gp("serves").value]
         if len(sweep) >= 6 and len(sweep) % 6 == 0:
@@ -79,6 +92,7 @@ class FakeBallPublisher(Node):
             f"max_serves={self._max_serves or 'unlimited'}")
 
     def _reset(self):
+        # 开始下一次发球：达到 max_serves 则收工空转；否则取下一条发球初值(位置+速度)、清飞行时。
         if self._max_serves and self._serve_i >= self._max_serves:
             self._finished = True
             self.get_logger().info(
@@ -86,34 +100,39 @@ class FakeBallPublisher(Node):
             return
         s = self._serves[self._serve_i % len(self._serves)]
         self._serve_i += 1
-        self._p = s[:3].copy()
-        self._v = s[3:].copy()
+        self._p = s[:3].copy()   # 初始位置 [x,y,z]
+        self._v = s[3:].copy()   # 初始速度 [vx,vy,vz]
         self._t = 0.0
         self.get_logger().info(
             f"serve {self._serve_i}: p={np.round(self._p, 2).tolist()} v={np.round(self._v, 2).tolist()}")
 
     def _tick(self):
+        # 定时器回调：一步物理积分 + 弹跳/结束判定 + 发一帧球位。
         if self._finished:
             return
+        # 发球间隔：暂停计时结束后触发下一次发球。
         if self._pause > 0.0:
             self._pause -= self._dt
             if self._pause <= 0.0:
                 self._reset()
             return
+        # 一步显式欧拉：加速度 = 二次阻力 + 重力，更新速度与位置。
         self._t += self._dt
         a = -self._k * np.linalg.norm(self._v) * self._v + self._g
         self._v = self._v + a * self._dt
         self._p = self._p + self._v * self._dt
-        # Centroid table contact at z = ball radius (same convention as the planner's
-        # predictor and configs/ball_physics.yaml).
+        # 桌面弹跳：球心落到 z=球半径、正在下落且在桌面 x 范围内 → 反弹
+        # （切向乘 C_h 衰减、法向乘 -C_v 反弹；与规划器预测器/ball_physics.yaml 同一约定）。
         if self._p[2] <= self._radius and self._v[2] < 0.0 and 0.0 <= self._p[0] <= self._x_max:
             self._p[2] = self._radius
             self._v[0] *= self._ch
             self._v[1] *= self._ch
             self._v[2] = -self._cv * self._v[2]
+        # 结束条件：越过机器人(end_x)/掉出地面/飞行超时 → 进入发球间隔，本帧不发。
         if self._p[0] < self._end_x or self._p[2] < -0.7 or self._t > self._max_flight:
             self._pause = self._pause_len
             return
+        # 正常帧：组一条 PoseArray（球在 index 0），时间戳用当前 ROS 时钟。
         msg = PoseArray()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self._frame

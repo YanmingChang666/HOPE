@@ -352,11 +352,19 @@ def run_eval(args) -> dict:
 
         Returns (events, applied_action) — the caller keeps ``applied_action`` as
         the next tick's ``last_action``.
+
+        【中文 —— sim2sim 每个 50Hz 周期如何得到并使用观测】
+        这一步刻意与部署 runner.run() 的单周期逻辑逐字节一致，所以 sim2sim 测的就是
+        “部署契约”本身：
+          1) scene.read_robot_state()  —— 从 MuJoCo 读机器人本体状态（观测的本体输入）；
+          2) lifecycle.update(...)     —— 由规划器指令推进挥拍状态机，得到本周期击球目标；
+          3) build_observation(...)    —— 与真机部署同一个函数，拼成 105 维观测；
+          4) policy.infer(obs)         —— 送入导出的 ONNX 策略，得到 29 维原始动作。
         """
-        state = scene.read_robot_state()
-        target = lifecycle.update(source.poll(), state)
-        obs = build_observation(state, target, last_action, default_q, fixed_station_xy)
-        raw_action = policy.infer(obs)
+        state = scene.read_robot_state()                       # 1) 观测的本体输入（MuJoCo 真实物理状态）
+        target = lifecycle.update(source.poll(), state)        # 2) 观测的目标输入（球拍目标/tts/正反手）
+        obs = build_observation(state, target, last_action, default_q, fixed_station_xy)  # 3) 拼 105 维观测
+        raw_action = policy.infer(obs)                         # 4) ONNX 推理得到原始动作
         # Applied action = raw with the passive head columns zeroed, matching both
         # the deploy runner and training's zeroed last_action feedback.
         applied_action = np.asarray(raw_action, dtype=np.float64).copy()

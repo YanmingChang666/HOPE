@@ -141,15 +141,25 @@ class MujocoDirectBridge(SimBridge):
         self._mj.mj_forward(self.model, self.data)
 
     def read_state(self) -> RobotState:
+        # 【中文说明 —— sim2real/sim2sim 的“观测输入”从哪来（MuJoCo 直连版本）】
+        # 这个方法读出机器人的本体感知状态 RobotState，正是 build_observation() 的 state 入参。
+        # 在 MuJoCo 里：状态直接从物理引擎的 qpos/qvel/sensordata 里精确读出（没有噪声）。
+        # 在真机上（对应 AimrtSimBridge）：这几项分别来自
+        #   base_pos/base_quat  -> 状态估计/里程计（或动捕）给出的基座位姿
+        #   base_ang_vel        -> 骨盆 IMU 陀螺仪（机体系角速度）
+        #   q / qd              -> 各关节编码器的角度与角速度
+        # 换句话说，只要把下面这几行换成读真机传感器，观测拼装(build_observation)完全不用改。
         d = self.data
-        base_pos = d.qpos[self._base_qadr:self._base_qadr + 3].copy()
-        base_quat = d.qpos[self._base_qadr + 3:self._base_qadr + 7].copy()  # (w,x,y,z)
+        # 基座(骨盆)自由关节的 qpos 布局：前 3 个是世界系位置 (x,y,z)，随后 4 个是朝向四元数。
+        base_pos = d.qpos[self._base_qadr:self._base_qadr + 3].copy()          # 基座世界位置（m）
+        base_quat = d.qpos[self._base_qadr + 3:self._base_qadr + 7].copy()  # (w,x,y,z) 基座朝向四元数
+        # 基座角速度：优先取 IMU 陀螺仪传感器（机体系，最贴近真机）；无该传感器时回退到自由关节的角速度 qvel。
         if self._gyro_adr >= 0:
-            base_ang_vel = d.sensordata[self._gyro_adr:self._gyro_adr + 3].copy()
+            base_ang_vel = d.sensordata[self._gyro_adr:self._gyro_adr + 3].copy()   # 骨盆陀螺仪 rad/s
         else:
-            base_ang_vel = d.qvel[self._base_vadr + 3:self._base_vadr + 6].copy()
-        q = d.qpos[self._q_adr].copy()
-        qd = d.qvel[self._v_adr].copy()
+            base_ang_vel = d.qvel[self._base_vadr + 3:self._base_vadr + 6].copy()   # 回退：自由关节角速度
+        q = d.qpos[self._q_adr].copy()   # 29 个受控关节的角度（按 JOINT_NAMES 顺序）rad
+        qd = d.qvel[self._v_adr].copy()  # 29 个受控关节的角速度 rad/s
         return RobotState(
             base_pos_w=base_pos,
             base_quat_w=base_quat,
@@ -193,6 +203,14 @@ class MujocoDirectBridge(SimBridge):
 
 class AimrtSimBridge(SimBridge):
     """Integration seam for the live AimRT MuJoCo sim process (NOT wired here).
+
+    【中文说明 —— 这就是 sim2real 真机部署时“观测从哪读”的接口】
+    真机（或 AimRT MuJoCo 进程）上，观测的每一路输入通过 AimRT 的 /body_drive/* 通道拿到：
+      * q / qd          <- 订阅各关节组的 joint_msgs/JointState（关节角、角速度）
+      * base 角速度/朝向 <- 订阅骨盆 IMU 的 sensor_msgs/Imu（陀螺仪 + 姿态）
+      * 下发目标         -> 发布 joint_msgs/JointCommand（位置+刚度+阻尼+力矩）到各关节组
+    读到这些后，同样丢给 build_observation() 拼成 105 维，与仿真完全同一条路径。
+    这里故意不接线（需要厂商 AimRT + joint_msgs 运行时），留成显式接口而不是伪造数据。
 
     To drive the running AimRT ``MujocoSimModule`` over the ``/body_drive/*``
     contract (see ``A3_MuJoCo_Sim`` README), a real implementation would:

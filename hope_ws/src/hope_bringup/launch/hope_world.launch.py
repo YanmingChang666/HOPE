@@ -1,5 +1,13 @@
 """Publish the HOPE world-frame static transforms from config."""
 
+# =============================================================================
+# 【中文说明】按配置发布 HOPE 世界坐标系下的一组静态 TF（球桌/球网/半场/地面/击球平面等）
+# -----------------------------------------------------------------------------
+#   从 config/hope_world_frame.yaml 读取各地标坐标，为每个地标起一个 tf2_ros 的
+#   static_transform_publisher，把它们作为 world 的子坐标系发布，供 RViz 可视化与
+#   下游对齐使用。其中 robot_mocap→robot_base_link 用配置里的实测外参(xyz/rpy)。
+# =============================================================================
+
 from pathlib import Path
 
 import yaml
@@ -8,12 +16,14 @@ from launch_ros.actions import Node
 
 
 def _load_world_config():
+    # 读取本包 config/hope_world_frame.yaml 的 hope_world 段。
     config_path = Path(__file__).resolve().parent.parent / "config" / "hope_world_frame.yaml"
     with config_path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)["hope_world"]
 
 
 def _static_tf(parent_frame, child_frame, xyz, rpy):
+    # 生成一个静态 TF 发布节点：parent→child，平移 xyz(米)、旋转 rpy(弧度)。
     return Node(
         package="tf2_ros",
         executable="static_transform_publisher",
@@ -32,12 +42,14 @@ def _static_tf(parent_frame, child_frame, xyz, rpy):
 
 
 def generate_launch_description():
+    # 解析配置：坐标系名、各地标坐标、动捕→base_link 外参、击球平面 x。
     config = _load_world_config()
     frames = config["frames"]
     landmarks = config["landmarks_m"]
     offset = config["mocap_to_base_link"]
     x_hit = config["planner"]["x_hit"]
 
+    # 逐地标建立 world→地标 的静态 TF；最后一条是 robot_mocap→base_link 的实测外参。
     world = frames["world"]
     nodes = [
         _static_tf(world, frames["table_center"], landmarks["table_center"], [0.0, 0.0, 0.0]),

@@ -65,6 +65,8 @@ class PingPongReferenceRunner:
         state = self.bridge.read_state()
         # Capture the startup station once; the fixed_station_error_xy obs term is
         # measured against this constant for the rest of the session.
+        # 【中文】只在启动时锁定一次“站位 xy”常量；此后每周期的 fixed_station_error_xy
+        # 观测项都相对这个常量来算，从而给策略提供“原地回中”的反馈。
         self.fixed_station_xy = np.asarray(state.base_pos_w[:2], dtype=np.float64).copy()
 
         tick = 0
@@ -72,13 +74,19 @@ class PingPongReferenceRunner:
             while max_ticks is None or tick < max_ticks:
                 loop_start = time.perf_counter()
 
+                # 【中文 —— sim2real 每个 50Hz 周期如何得到并使用观测】
+                # 1) 读机器人状态（真机=IMU+编码器；仿真=MuJoCo）：这是观测的本体感知输入。
                 state = self.bridge.read_state()
+                # 2) 取最新的球拍指令（规划器发来），推进挥拍状态机，得到本周期要观测的击球目标。
                 cmd = self.source.poll()
                 target = self.lifecycle.update(cmd, state)
 
+                # 3) 把 state + target + last_action + 默认站姿 + 站位常量 拼成 105 维观测。
+                #    这一步与 sim2sim 评估脚本调用的是完全同一个 build_observation()。
                 obs = build_observation(
                     state, target, self.last_action, self.default_q, self.fixed_station_xy
                 )
+                # 4) 送入 ONNX 策略，得到 29 维原始动作。
                 raw_action = self.policy.infer(obs)
                 # The APPLIED action: with a passive neck the head columns are never
                 # actuated, so they are zeroed before feedback — training exposes the

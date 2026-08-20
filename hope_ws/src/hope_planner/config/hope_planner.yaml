@@ -1,48 +1,47 @@
+# =============================================================================
+# 【中文说明】hope_planner 节点的默认 ROS 参数（可被 launch/命令行覆盖）
+#   与 node.py 里的 declare_parameter 一一对应；坐标系为世界系(+x前/+y左/+z上，米·秒)。
+# =============================================================================
 hope_planner:
   ros__parameters:
-    # --- Topics / frames ---
-    poses_topic: "/poses"          # mocap ball stream (geometry_msgs/PoseArray)
-    command_topic: "/racket/command"
-    frame_id: "world"
-    # Which slot in the /poses PoseArray is the ball (PoseArray carries no names;
-    # publish the ball first, or set this to its index). Confirm against your
-    # live stream, e.g. `ros2 topic echo /poses --once`.
+    # --- Topics / frames —— 话题与坐标系 ---
+    poses_topic: "/poses"          # 动捕球流输入话题 (geometry_msgs/PoseArray)
+    command_topic: "/racket/command"  # 球拍指令输出话题
+    frame_id: "world"              # 输出指令的坐标系名
+    # /poses 里球所在的槽位下标（PoseArray 不带名字：把球发在最前，或在此指定其下标）。
+    # 建议用 `ros2 topic echo /poses --once` 核对现场实际顺序。
     ball_pose_index: 0
 
-    # --- Strike plane ---
-    # Fixed virtual hitting-plane x (m). Set to your robot placement + reach so
-    # the incoming ball crosses this plane in front of the robot. Example only.
+    # --- Strike plane —— 击球平面 ---
+    # 固定虚拟击球平面的 x(米)。按机器人摆位+可达范围设置，使来球在机器人前方穿过此平面。
+    # 此处仅为示例值。
     x_hit: 0.2
 
-    # --- Forehand / backhand selection ---
-    # The side is chosen once per incoming ball by splitting the predicted
-    # lateral (y) crossing at swing_side_split_y: y below the split -> FOREHAND,
-    # at/above -> BACKHAND. Default splits at the table centreline; tune to your
-    # robot's lateral position and reach.
+    # --- Forehand / backhand selection —— 正/反手选择 ---
+    # 每个来球只判一次：用预测的横向落点 y 与 swing_side_split_y 比较——
+    # y < split → 正手 FOREHAND；y ≥ split → 反手 BACKHAND。默认取桌面中线，
+    # 请按机器人的横向站位与可达范围调整。
     swing_side_split_y: -0.7625
-    # Optional small hysteresis band (m) around the split so a ball arriving near
-    # the boundary does not flip the side between consecutive rallies. 0 disables.
+    # 分界线附近的迟滞带(米)：让边界附近的来球不至于在相邻回合来回翻转正/反手；0 关闭。
     swing_side_hysteresis_y: 0.04
 
-    # --- Fixed landing target (opponent half) ---
-    target_land_x: 2.055           # opponent half-centre x (= table length * 3/4)
-    target_land_y: -0.7625         # opponent half-centre y (= -table width / 2)
-    # Desired post-strike flight time (s). Shapes the demanded racket speed; tune
-    # to your policy's reachable racket-velocity envelope.
+    # --- Fixed landing target (opponent half) —— 固定目标落点(对方半场) ---
+    target_land_x: 2.055           # 对方半场中心 x (= 桌长 * 3/4)
+    target_land_y: -0.7625         # 对方半场中心 y (= -桌宽 / 2)
+    # 期望的击球后飞行时间(秒)：决定所需球拍速度大小，按策略可达的球拍速度包络调。
     delta_t_flight: 0.5
 
-    # --- Solve / prediction ---
-    # Every mocap sample feeds the estimator; the predict+plan solve runs at most
-    # every solve_period_s (<= 50 Hz). 0.0 solves on every sample.
+    # --- Solve / prediction —— 求解与预测限频 ---
+    # 每帧动捕都喂给估计器；但较重的“预测+规划”求解至多每 solve_period_s 跑一次(≤50Hz)。
+    # 设 0.0 表示每帧都求解。
     solve_period_s: 0.02
-    max_predict_time: 2.0          # forward prediction horizon (s)
+    max_predict_time: 2.0          # 前向预测时域上限(秒)
 
-    # --- Table placement ---
-    # Table's +y edge in the play frame (table occupies y in [y_max - width, y_max]).
+    # --- Table placement —— 球桌摆位 ---
+    # 球桌在比赛系里的 +y 边沿(桌面占据 y∈[y_max - width, y_max])。
     table_y_max: 0.0
 
-    # --- Ball physics ---
-    # No-spin drag / restitution / gravity / geometry are read from
-    # configs/ball_physics.yaml. Leave empty to auto-discover it by walking up
-    # from the package, or set an explicit path.
+    # --- Ball physics —— 球物理来源 ---
+    # 无旋阻力/恢复/重力/几何从 configs/ball_physics.yaml 读取。留空则自动从包目录向上搜索，
+    # 或在此填绝对/相对路径显式指定。
     ball_physics_path: ""

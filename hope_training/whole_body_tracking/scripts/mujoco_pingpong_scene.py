@@ -320,19 +320,25 @@ class PingPongRealPhysicsScene:
 
     # -- state readout ----------------------------------------------------------
     def read_robot_state(self) -> RobotObsState:
+        # 【中文说明 —— sim2sim 评估里“观测输入”从 MuJoCo 怎么读】
+        # 这个方法与部署参考包 sim_bridge.MujocoDirectBridge.read_state 是等价的：
+        # 从 MuJoCo 的 qpos/qvel/sensordata 精确读出机器人本体状态，字段名与部署侧
+        # RobotState 完全一致，因此可以直接丢进同一个 build_observation() 拼观测。
+        # 这保证了 sim2sim 走的是“部署契约”，而不是另写一套会发散的实现。
         d = self.data
-        base_pos = d.qpos[self._base_qadr:self._base_qadr + 3].copy()
-        base_quat = d.qpos[self._base_qadr + 3:self._base_qadr + 7].copy()  # (w,x,y,z)
+        base_pos = d.qpos[self._base_qadr:self._base_qadr + 3].copy()          # 基座(骨盆)世界位置 m
+        base_quat = d.qpos[self._base_qadr + 3:self._base_qadr + 7].copy()  # (w,x,y,z) 基座朝向四元数
+        # 基座角速度：优先取骨盆 IMU 陀螺仪（机体系）；无该传感器则回退自由关节角速度。
         if self._gyro_adr >= 0:
-            base_ang_vel = d.sensordata[self._gyro_adr:self._gyro_adr + 3].copy()
+            base_ang_vel = d.sensordata[self._gyro_adr:self._gyro_adr + 3].copy()   # 陀螺仪 rad/s
         else:
-            base_ang_vel = d.qvel[self._base_vadr + 3:self._base_vadr + 6].copy()
+            base_ang_vel = d.qvel[self._base_vadr + 3:self._base_vadr + 6].copy()   # 回退角速度
         return RobotObsState(
             base_pos_w=base_pos,
             base_quat_w=base_quat,
             base_ang_vel_b=base_ang_vel,
-            q=d.qpos[self._q_adr].copy(),
-            qd=d.qvel[self._v_adr].copy(),
+            q=d.qpos[self._q_adr].copy(),   # 关节角 rad（按 joint_names 顺序）
+            qd=d.qvel[self._v_adr].copy(),  # 关节角速度 rad/s
         )
 
     def ball_state(self):

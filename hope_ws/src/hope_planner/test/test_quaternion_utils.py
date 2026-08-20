@@ -1,5 +1,9 @@
 """Quaternion utility tests."""
 
+# 【中文说明】四元数工具测试：验证 ①输出四元数是单位模、②开启 constrain_up 后仍是单位模、
+#   ③把局部 +x 轴旋到目标法向、④即便叠加了 roll 约束，局部 +x 仍精确对齐目标法向
+#   （即 roll 约束只动绕轴自转，不破坏拍面朝向）。
+
 import numpy as np
 
 from hope_planner.quaternion_utils import _quat_to_matrix, normal_to_quaternion

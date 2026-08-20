@@ -1,26 +1,31 @@
+# =============================================================================
+# 【中文说明】世界坐标系静态 TF 的配置（由 hope_world.launch.py 读取并发布）
+#   定义各坐标系名、球桌尺寸、地标坐标、击球平面 x，以及动捕→base_link 实测外参。
+#   坐标系约定：+x 向前(朝对手)、+y 向左、+z 向上；z=0 为桌面；原点在近端左角，
+#   故桌面占据 x∈[0,length]、y∈[-width,0]。所有长度单位为米、角度为弧度。
+# =============================================================================
 hope_world:
-  # Frame names published as static transforms by hope_world.launch.py.
+  # 由 hope_world.launch.py 发布为静态 TF 的坐标系名。
   frames:
     world: world
-    robot_mocap: robot_mocap          # the robot's mocap marker-cluster frame
-    robot_base_link: robot_base_link  # the robot URDF base_link
-    table_center: table_center
-    robot_half_center: robot_half_center
-    opponent_half_center: opponent_half_center
-    net_center: net_center
-    floor_origin: floor_origin
-    virtual_hit_plane: virtual_hit_plane
+    robot_mocap: robot_mocap          # 机器人身上的动捕标记簇坐标系
+    robot_base_link: robot_base_link  # 机器人 URDF 的 base_link
+    table_center: table_center        # 桌面中心
+    robot_half_center: robot_half_center      # 机器人半场中心
+    opponent_half_center: opponent_half_center  # 对方半场中心
+    net_center: net_center            # 球网中心
+    floor_origin: floor_origin        # 地面原点
+    virtual_hit_plane: virtual_hit_plane  # 虚拟击球平面
 
-  # ITTF regulation table dimensions (m). World frame: +x forward (toward the
-  # opponent), +y left, +z up; z = 0 at the table surface; origin at the
-  # near-side left table corner, so the table occupies x in [0, length],
-  # y in [-width, 0].
+  # ITTF 标准球桌尺寸(米)。坐标系：+x 向前(朝对手)、+y 向左、+z 向上；z=0 为桌面；
+  # 原点在近端左角，故桌面占据 x∈[0,length]、y∈[-width,0]。
   table_m:
-    length: 2.74
-    width: 1.525
-    surface_height: 0.76
-    net_height: 0.1525
+    length: 2.74          # 桌长
+    width: 1.525          # 桌宽
+    surface_height: 0.76  # 桌面离地高度
+    net_height: 0.1525    # 网高(桌面以上)
 
+  # 各地标在世界系下的坐标(米)。
   landmarks_m:
     table_center: [1.37, -0.7625, 0.0]
     robot_half_center: [0.685, -0.7625, 0.0]
@@ -29,15 +34,13 @@ hope_world:
     floor_origin: [0.0, 0.0, -0.76]
 
   planner:
-    # Fixed virtual hit-plane x (m); publish it as a frame for visualization.
+    # 固定虚拟击球平面 x(米)；这里作为一个可视化坐标系发布出来。
     x_hit: 0.0
 
   mocap_to_base_link:
-    # Static transform from the robot's mocap marker-cluster frame to its URDF
-    # base_link. Measure the translation (xyz, m) and rotation (rpy, rad) from
-    # the marker-cluster origin to base_link (CAD or tape-measure + level), then
-    # refine by comparing FK-predicted base_link against the mocap reading while
-    # the robot stands still. Until measured, [0,0,0] means "marker cluster ==
-    # base_link" (only correct if the markers are exactly at base_link).
-    xyz: [0.0, 0.0, 0.0]   # TODO: measured marker-cluster -> base_link translation (m)
-    rpy: [0.0, 0.0, 0.0]   # TODO: measured marker-cluster -> base_link rotation (rad)
+    # 机器人“动捕标记簇坐标系 → URDF base_link”的静态外参。做法：先用 CAD 或卷尺+水平仪
+    # 量出从标记簇原点到 base_link 的平移(xyz,米)与旋转(rpy,弧度)，再让机器人静止站立、
+    # 用正运动学预测的 base_link 与动捕读数对比来精修。未标定前填 [0,0,0] 表示“标记簇即
+    # base_link”（仅当标记恰好装在 base_link 处才正确）。
+    xyz: [0.0, 0.0, 0.0]   # TODO: 实测 标记簇→base_link 平移(米)
+    rpy: [0.0, 0.0, 0.0]   # TODO: 实测 标记簇→base_link 旋转(弧度)

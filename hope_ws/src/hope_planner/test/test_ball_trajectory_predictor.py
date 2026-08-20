@@ -1,5 +1,10 @@
 """Ball trajectory predictor unit tests (no-spin flight + diagonal table bounce)."""
 
+# 【中文说明】轨迹预测器单元测试：验证 ①来球能穿过击球平面、②远离的球无有效击球、
+#   ③桌面弹跳把竖直速度反向并按 C_h/C_v 衰减、④先弹一次再穿平面的路径、⑤出界弹跳不算、
+#   ⑥关键：弹跳接触面是“球心 z=球半径”而非 z=0（关掉阻力用解析解卡死这个约定，
+#   若用 z=0 会让击球时刻偏移约 14ms，测试据此拒绝错误约定）。
+
 import numpy as np
 
 from hope_planner.ball_trajectory_predictor import BallTrajectoryPredictor

@@ -55,7 +55,12 @@ def quat_rotate_inverse(q: np.ndarray, v: np.ndarray) -> np.ndarray:
 
 
 def projected_gravity_body(q: np.ndarray) -> np.ndarray:
-    """Unit gravity direction expressed in the base body frame (IMU term)."""
+    """Unit gravity direction expressed in the base body frame (IMU term).
+
+    【中文】重力方向投影观测项：把世界系单位重力 (0,0,-1) 用基座朝向的逆旋转到机体系。
+    机体水平时约为 (0,0,-1)；机体前倾/侧倾时 x/y 分量变大——等价于“机体倾斜度”。
+    真机上这一项等价于 IMU 加速度计静态读出的重力方向。
+    """
     return quat_rotate_inverse(q, _GRAVITY_WORLD)
 
 
@@ -64,6 +69,10 @@ def base_forward_xy(q: np.ndarray) -> np.ndarray:
 
     This is the explicit heading vector the policy uses to resolve world-frame
     goal directions without an absolute yaw reference.
+
+    【中文】基座航向观测项：把机体前向轴 +x 旋到世界系，取其 xy 分量并重新归一化成单位向量。
+    这给策略一个“显式航向”，使它无需绝对 yaw 角就能把世界系的目标方向（球拍目标、回中误差）
+    解算到自身参照下。
     """
     fwd = quat_rotate(q, np.array([1.0, 0.0, 0.0], dtype=np.float64))
     n = max(float(np.hypot(fwd[0], fwd[1])), 1e-6)

@@ -11,6 +11,20 @@ This helper is intentionally small and practical:
 - Storage plugin: auto-detect `mcap` vs `sqlite3`
 """
 
+# =============================================================================
+# 【中文说明】把 rosbag2 里的球流导出成 HOPE 标定用 CSV（列：t, x, y, z）
+# -----------------------------------------------------------------------------
+#   用途：录制球轨迹用于离线标定/拟合球物理参数。工作流就是 `ros2 bag record /poses`，
+#         再用本脚本把 bag 转成简单 CSV 喂给拟合工具。
+#   输入话题两种都支持：
+#     · geometry_msgs/PoseArray（标准 /poses 流，球在 --ball-index 槽位，默认 0）；
+#     · 旧版 geometry_msgs/PointStamped（如 /ball/point）。
+#   时间来源：优先用消息头时间戳（非零时）；否则退回 bag 的接收时间。
+#   存储后端：自动识别 mcap 或 sqlite3（先看 metadata.yaml，再看 *.mcap/*.db3 文件）。
+#   健壮性：对“bag 未录完/数据文件为空/话题类型不符”都给出明确的中文可读报错。
+#   入口：命令行 `hope_bag_to_csv --bag <dir> --output <csv> [--topic /poses] [--ball-index 0]`。
+# =============================================================================
+
 from __future__ import annotations
 
 import argparse
@@ -25,6 +39,8 @@ from rosidl_runtime_py.utilities import get_message
 
 
 def _detect_storage_id(bag_dir: Path) -> str:
+    # 识别 rosbag2 存储后端：优先从 metadata.yaml 读 storage_identifier；
+    # 读不到再按数据文件后缀猜（*.mcap→mcap，*.db3→sqlite3）。
     metadata = bag_dir / "metadata.yaml"
     if metadata.is_file():
         text = metadata.read_text(errors="replace")
@@ -45,6 +61,7 @@ def _detect_storage_id(bag_dir: Path) -> str:
 
 
 def _check_bag_files_look_real(bag_dir: Path) -> None:
+    # 录制完整性预检：既要有数据文件，又不能是 0 字节（录制中途 kill 常见坑）。
     data_files = list(bag_dir.glob("*.mcap")) + list(bag_dir.glob("*.db3"))
     if not data_files:
         raise RuntimeError(
@@ -61,6 +78,8 @@ def _check_bag_files_look_real(bag_dir: Path) -> None:
 
 
 def bag_point_topic_to_csv(bag_path: str, topic: str, output_csv: str, ball_index: int = 0) -> int:
+    # 主转换函数：打开 bag → 顺序读取指定话题 → 抽取球位与时间 → 按时间排序 → 写 CSV。
+    # 返回写入的行数。
     bag_dir = Path(bag_path)
     if not bag_dir.exists():
         raise RuntimeError(f"Bag path does not exist: {bag_path}")
@@ -79,6 +98,7 @@ def bag_point_topic_to_csv(bag_path: str, topic: str, output_csv: str, ball_inde
         ),
     )
 
+    # 校验目标话题存在，并按其消息类型动态拿到反序列化类型。
     topic_types = {meta.name: meta.type for meta in reader.get_all_topics_and_types()}
     if topic not in topic_types:
         raise RuntimeError(f"Topic {topic!r} not found in bag {bag_path!r}")
@@ -86,6 +106,7 @@ def bag_point_topic_to_csv(bag_path: str, topic: str, output_csv: str, ball_inde
     msg_type = get_message(topic_types[topic])
     rows = []
 
+    # 顺序遍历 bag 里所有消息，只保留目标话题的帧。
     while reader.has_next():
         current_topic, data, bag_time_ns = reader.read_next()
         if current_topic != topic:
@@ -104,6 +125,7 @@ def bag_point_topic_to_csv(bag_path: str, topic: str, output_csv: str, ball_inde
                 "(the standard /poses stream) or geometry_msgs/PointStamped."
             )
 
+        # 时间戳：消息头非零则用消息头（更接近采集时刻）；否则退回 bag 接收时间（纳秒→秒）。
         if msg.header.stamp.sec != 0 or msg.header.stamp.nanosec != 0:
             t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         else:
@@ -114,6 +136,7 @@ def bag_point_topic_to_csv(bag_path: str, topic: str, output_csv: str, ball_inde
     if not rows:
         raise RuntimeError(f"No messages found on topic {topic!r} in bag {bag_path!r}")
 
+    # 按时间升序排序后写出（bag 内顺序通常已按接收时间，但消息头时间可能乱序，故显式排序）。
     rows.sort(key=lambda r: r[0])
     out_path = Path(output_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +148,7 @@ def bag_point_topic_to_csv(bag_path: str, topic: str, output_csv: str, ball_inde
 
 
 def main(argv=None) -> None:
+    # 命令行入口（对应 setup.py 里的 hope_bag_to_csv 脚本）：解析参数并调用转换函数。
     parser = argparse.ArgumentParser(
         description="Convert a rosbag2 ball stream (/poses PoseArray or a PointStamped topic) "
         "into HOPE calibration CSV (t,x,y,z)."

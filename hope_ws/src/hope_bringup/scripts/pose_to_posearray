@@ -33,6 +33,20 @@ an ``_id_<N>`` suffix — a tracker named ``ball`` publishes
 publishes (``ros2 topic list | grep vrpn``).
 """
 
+# =============================================================================
+# 【中文说明】适配器节点：把“逐 tracker 的 PoseStamped”聚合成规划器要的“单条 PoseArray”
+# -----------------------------------------------------------------------------
+#   问题：vrpn_mocap 每个 tracker 各发一条 PoseStamped（如 /vrpn_mocap/ball/pose），
+#         而 hope_planner 只吃一条 /poses(PoseArray)，球在 ball_pose_index(默认0)。
+#   做法：缓存每个输入话题的最新 pose；当“触发话题”(通常就是球)更新时，立即组一条
+#         PoseArray 发出——其第 i 个槽位放第 i 个输入话题的最新 pose。故输出频率≈球采样率。
+#   参数：input_topics(有序，列表顺序=PoseArray下标顺序，球放第0)、trigger_index(触发槽)、
+#         output_topic(默认 /poses)、frame_id(空则沿用触发消息自身 frame)。
+#   时间戳：直接透传触发消息的头时间戳（不 re-stamp）。注意随包 VRPN 驱动打的是 ROS 端
+#           “接收时间”而非动捕采集时间，速度拟合会吃到网络/轮询抖动；上游若能给真采集时间，
+#           本适配器会原样保留。尚未收到数据的槽位填单位位姿(identity)。
+# =============================================================================
+
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from rclpy.node import Node
@@ -48,6 +62,7 @@ class PoseToPoseArray(Node):
         self.declare_parameter("output_topic", "/poses")
         self.declare_parameter("frame_id", "")
 
+        # 读取并校验参数：至少要有一个输入话题，触发下标须在范围内。
         topics = [str(t) for t in self.get_parameter("input_topics").value]
         if not topics:
             raise ValueError("input_topics must list at least one PoseStamped topic")
@@ -57,7 +72,7 @@ class PoseToPoseArray(Node):
                 f"trigger_index {self._trigger} out of range for {len(topics)} input topic(s)"
             )
         self._frame = str(self.get_parameter("frame_id").value)
-        self._latest: list = [None] * len(topics)
+        self._latest: list = [None] * len(topics)   # 每个输入话题的最新 pose 缓存
 
         # Input QoS matches the VRPN client's SensorDataQoS publisher (best effort).
         in_qos = QoSProfile(
@@ -88,6 +103,7 @@ class PoseToPoseArray(Node):
         )
 
     def _make_callback(self, index: int):
+        # 为第 index 个输入话题生成回调（闭包捕获下标）：更新缓存；若它是触发话题则立即发布。
         def _cb(msg: PoseStamped) -> None:
             self._latest[index] = msg
             if index == self._trigger:
@@ -96,6 +112,8 @@ class PoseToPoseArray(Node):
         return _cb
 
     def _publish(self, trigger_msg: PoseStamped) -> None:
+        # 组一条 PoseArray：头时间戳沿用触发消息；frame 用参数覆盖或触发消息自身；
+        # 各槽位放对应输入话题的最新 pose，尚无数据的槽位填单位位姿 Pose()。
         out = PoseArray()
         out.header.stamp = trigger_msg.header.stamp   # trigger stamp, passed through unmodified
         out.header.frame_id = self._frame or trigger_msg.header.frame_id

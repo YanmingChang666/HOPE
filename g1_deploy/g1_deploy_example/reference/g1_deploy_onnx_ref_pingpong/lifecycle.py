@@ -132,17 +132,22 @@ class SwingLifecycle:
                 self.active_task_id = None
 
         # 3) Emit the goal to observe this tick.
+        # 【中文】这里产出的 ObsTarget 就是观测里 4 个“目标类”分量的来源：
+        #   racket_target_rel_base / racket_target_vel_w / time_to_strike / swing_side。
+        # 挥拍(SWING)与跟随(FOLLOW_THROUGH)阶段：用规划器锁定的真实击球目标与倒计时。
         if self.phase in (Phase.SWING, Phase.FOLLOW_THROUGH):
             return ObsTarget(
-                pos_w=self._target_pos_w,
-                vel_w=self._target_vel_w,
-                time_to_strike=self._tts,
-                swing_side=float(self.swing_side),
+                pos_w=self._target_pos_w,           # 球拍目标世界位置（m）
+                vel_w=self._target_vel_w,           # 球拍目标世界速度（m/s）
+                time_to_strike=self._tts,           # 距击球时间（s，击球时过 0 转负）
+                swing_side=float(self.swing_side),  # +1 正手 / -1 反手（task 内锁定）
             )
         # READY / RECOVERY -> in-place ready reach, clock pinned.
+        # 【中文】就绪/回收阶段：无球可打，目标退化为“身前一个固定预备位”，时钟钉在预设值，
+        # 让策略保持预备姿态并原地回中。
         return ObsTarget(
-            pos_w=self._ready_target_pos_w(state),
-            vel_w=np.zeros(3),
-            time_to_strike=c.ready_time_to_strike,
+            pos_w=self._ready_target_pos_w(state),  # 身前预备位（随正反手左右偏置）
+            vel_w=np.zeros(3),                      # 预备时目标速度为 0
+            time_to_strike=c.ready_time_to_strike,  # 时钟钉在预设值
             swing_side=float(self.swing_side),
         )

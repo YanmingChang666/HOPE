@@ -11,6 +11,13 @@ per-tracker ``PoseStamped`` while the planner needs a ``PoseArray`` on ``/poses`
 Skipped automatically when ``rclpy`` is unavailable (needs a sourced ROS 2 environment).
 """
 
+# 【中文说明】动捕适配器 pose_to_posearray 的冒烟测试（需 source 过 ROS 2 环境，否则自动跳过）：
+#   验证适配器契约——①把球 tracker 的 PoseStamped 转发成 /poses 的 poses[0]、且原样透传采集
+#   时间戳与 frame(不 re-stamp)；②两个输入话题时，PoseArray 槽位顺序=输入话题顺序，且只有
+#   触发话题(球)才触发发布(先发 robot 不应单独触发)。
+#   实现上用 importlib 直接把无 .py 后缀的可执行脚本当模块加载，再在独立 rclpy Context 里
+#   跑一个单线程执行器 pump 收发。
+
 from __future__ import annotations
 
 import importlib.machinery

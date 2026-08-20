@@ -14,6 +14,23 @@ used only as a fallback when it is absent, so the pure modules import and run
 without any config on disk.
 """
 
+# =============================================================================
+# 【中文说明】物理常量与调参参数（整个规划栈的“参数中心”）
+# -----------------------------------------------------------------------------
+#   本文件定义三组参数数据类，并提供从 configs/ball_physics.yaml 加载它们的函数：
+#     · TableParams    球桌/球网几何（长宽高、网位置、网高、网两侧外伸）
+#     · BallPhysics    无旋球空气动力学与恢复系数（阻力 k、桌面切/法向恢复、重力、球半径）
+#     · PlannerConfig  规划器调参（估计窗口、积分步长、击球平面、目标落点、球拍恢复系数等）
+#
+#   坐标系约定（与 ball_physics.yaml 一致）：+x 向前(朝对手)、+y 向左、+z 向上(右手系)；
+#   z=0 为桌面，世界原点在“近端左角”，故桌面占据 x∈[0,length]、y∈[-width,0]。
+#   球态为纯无旋六维：[x, y, z, vx, vy, vz]。
+#
+#   设计要点：dataclass 里的默认值“镜像”了 YAML 文件，只在磁盘上找不到 YAML 时作兜底，
+#   这样纯算法模块无需任何配置文件即可 import 并运行（便于单元测试/离线调试）。
+#   加载优先级：显式 path > 自动向上搜索 configs/ball_physics.yaml > dataclass 默认值。
+# =============================================================================
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
@@ -24,6 +41,7 @@ import numpy as np
 @dataclass
 class TableParams:
     """Table / net geometry, expressed in the play frame (table at y in [-width, 0])."""
+    # 球桌与球网几何（在比赛坐标系下：桌面占据 y∈[-width, 0]）。
 
     length: float = 2.74          # m, along +x
     width: float = 1.525          # m, table occupies y in [-width, 0]
@@ -36,11 +54,14 @@ class TableParams:
     @classmethod
     def from_mapping(cls, data: Dict, y_max: Optional[float] = None) -> "TableParams":
         """Build from a parsed ``ball_physics.yaml`` mapping (missing keys -> defaults)."""
+        # 从解析后的 YAML 字典构造；缺失的键一律回落到上面的默认值（容错，绝不抛异常）。
         d = cls()
         if y_max is not None:
             d.y_max = float(y_max)
         geom = data.get("geometry", {}) if isinstance(data, dict) else {}
         geom = geom if isinstance(geom, dict) else {}
+        # 优先读顶层 `table`/`net`（当前 ball_physics.yaml 的规范 schema）；
+        # 找不到再回退到旧版的 `geometry.table`/`geometry.net` 嵌套结构（向后兼容）。
         # Prefer top-level `table`/`net` (canonical ball_physics.yaml schema);
         # fall back to the older `geometry.table`/`geometry.net` nesting.
         table = data.get("table", geom.get("table", {})) if isinstance(data, dict) else {}
@@ -65,6 +86,7 @@ class TableParams:
 @dataclass
 class BallPhysics:
     """No-spin aerodynamic and restitution parameters."""
+    # 无旋球的空气动力学与恢复系数（预测器与目标规划器共用同一套物理常量）。
 
     k: float = 0.1261             # 1/m, quadratic drag: a = -k |v| v
     C_h: float = 0.631            # tangential retention at a table bounce (= 1 - a_t)
@@ -76,17 +98,19 @@ class BallPhysics:
     @classmethod
     def from_mapping(cls, data: Dict) -> "BallPhysics":
         """Build from a parsed ``ball_physics.yaml`` mapping (missing keys -> defaults)."""
+        # 从 YAML 字典读取，键名兼容多种写法（用 _first 依次尝试候选键）；缺失即用默认值。
         d = cls()
         if not isinstance(data, dict):
             return d
         ball = data.get("ball", {})
-        drag = data.get("drag", data.get("flight", {}))
-        contact = data.get("contact", {})
+        drag = data.get("drag", data.get("flight", {}))       # 阻力段：兼容 drag / flight 两种命名
+        contact = data.get("contact", {})                     # 接触段：内含 table / paddle 子表
         table = contact.get("table", {}) if isinstance(contact, dict) else {}
 
-        k = _first(drag, ("k_d", "k", "coefficient"))
+        k = _first(drag, ("k_d", "k", "coefficient"))         # 二次阻力系数（多种别名）
         if k is not None:
             d.k = float(k)
+        # 重力只取标量大小，强制写成朝下的 [0,0,-|g|]，避免 YAML 里符号写反导致重力朝上。
         gravity = _first(data, ("gravity",)) or _first(drag, ("g", "gravity"))
         if gravity is not None:
             d.g = np.array([0.0, 0.0, -abs(float(gravity))])
@@ -95,9 +119,11 @@ class BallPhysics:
                 d.radius = float(ball["radius"])
             if ball.get("mass") is not None:
                 d.mass = float(ball["mass"])
+        # 桌面法向恢复系数 C_v（弹起时竖直速度保留比例）。
         c_v = _first(table, ("restitution", "e_n", "e_eff", "restitution_normal"))
         if c_v is not None:
             d.C_v = float(c_v)
+        # 桌面切向保留 C_h：既可直接给 C_h，也可给切向阻尼 a_t 后换算 C_h = 1 - a_t。
         c_h = _first(table, ("restitution_tangential", "tangential_retention"))
         if c_h is not None:
             d.C_h = float(c_h)
@@ -111,37 +137,40 @@ class BallPhysics:
 @dataclass
 class PlannerConfig:
     """Planner tuning parameters."""
+    # 规划器调参：可经由 ROS 参数覆盖，也是 node.py 里 declare_parameter 的默认来源。
 
-    # State estimation
-    poly_order: int = 2           # polynomial fit order
-    fit_window: int = 31          # number of position samples in the velocity fit
-    mocap_hz: float = 300.0       # nominal motion-capture sample rate
+    # State estimation —— 状态估计
+    poly_order: int = 2           # 多项式拟合阶数（2 阶=位置/速度/加速度）
+    fit_window: int = 31          # 速度拟合所用的位置样本数（滑动窗口长度）
+    mocap_hz: float = 300.0       # 标称动捕采样率（仅供参考/调参用）
 
-    # Trajectory prediction
-    dt_integrate: float = 0.001   # integration time step (s)
-    max_predict_time: float = 2.0  # forward prediction horizon (s)
-    bounce_z_tol: float = 0.005   # z threshold for a point-ball bounce dip (m)
-    bounce_center_z_max: float = 0.05  # local-minimum height for a centre-tracked bounce (m)
+    # Trajectory prediction —— 轨迹预测
+    dt_integrate: float = 0.001   # 前向积分步长（秒），越小越精但越慢
+    max_predict_time: float = 2.0  # 前向预测时域上限（秒），超时则判无有效击球
+    bounce_z_tol: float = 0.005   # 点球模型判弹跳的 z 触底阈值（米）
+    bounce_center_z_max: float = 0.05  # 中心跟踪球判弹跳的局部极小高度阈值（米）
 
-    # Racket planning
-    x_hit: float = 0.0            # fixed virtual hitting-plane x coordinate (m)
+    # Racket planning —— 球拍规划
+    x_hit: float = 0.0            # 固定虚拟击球平面的 x 坐标（米）
     target_land: np.ndarray = field(
         default_factory=lambda: np.array([2.055, -0.7625, 0.02])
     )                             # fixed landing target (opponent-half centre); z = ball radius,
                                   # the CENTROID height at table contact (same convention as the
                                   # bounce planes everywhere else)
-    delta_t_flight: float = 0.5   # desired post-strike flight time (s)
-    C_r: float = 0.654            # paddle normal restitution
-    racket_radius: float = 0.075  # m, paddle radius
+    delta_t_flight: float = 0.5   # 期望的击球后飞行时间（秒），决定所需球拍速度大小
+    C_r: float = 0.654            # 球拍法向恢复系数
+    racket_radius: float = 0.075  # 米，球拍半径
 
     # Simplified paddle tangential contact (used by ball_contact.py)
-    paddle_a_t: float = 0.52      # tangential damping fraction
-    paddle_b_t: float = 0.0       # impact-angle coupling for the tangential term
-    paddle_mu: float = 0.5        # friction-cone cap
+    # 简化的球拍切向接触模型参数（供 ball_contact.py 使用）：
+    paddle_a_t: float = 0.52      # 切向阻尼比例
+    paddle_b_t: float = 0.0       # 切向项对入射角的耦合系数
+    paddle_mu: float = 0.5        # 摩擦锥上限（切向冲量封顶）
 
 
 def _first(mapping: Dict, keys) -> Optional[float]:
     """Return the first present key's value from a mapping, else None."""
+    # 按候选键顺序返回第一个存在且非 None 的值——用于兼容 YAML 里同一含义的多种键名。
     if not isinstance(mapping, dict):
         return None
     for key in keys:
@@ -152,6 +181,7 @@ def _first(mapping: Dict, keys) -> Optional[float]:
 
 def find_ball_physics_config(start: Optional[Path] = None) -> Optional[Path]:
     """Search upward from ``start`` (or this file) for ``configs/ball_physics.yaml``."""
+    # 从 start（或本文件）逐级向上查找 configs/ball_physics.yaml，找到即返回，找不到返回 None。
     base = Path(start) if start is not None else Path(__file__).resolve()
     for parent in [base, *base.parents]:
         candidate = parent / "configs" / "ball_physics.yaml"
@@ -162,11 +192,12 @@ def find_ball_physics_config(start: Optional[Path] = None) -> Optional[Path]:
 
 def _read_physics_yaml(path: Optional[str] = None) -> Dict:
     """Load the ball-physics YAML as a dict; return {} if missing or unreadable."""
+    # 读取物理 YAML 为字典；文件缺失/解析失败一律返回 {}（让上层回落到默认值，绝不崩溃）。
     resolved = Path(path) if path else find_ball_physics_config()
     if not resolved or not Path(resolved).is_file():
         return {}
     try:
-        import yaml  # lazy import so the pure modules import without PyYAML
+        import yaml  # 延迟导入：没装 PyYAML 时纯算法模块仍可 import（只是拿不到 YAML）
         with open(resolved, "r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
         return data if isinstance(data, dict) else {}
@@ -191,6 +222,8 @@ def load_paddle_params(path: Optional[str] = None) -> Dict[str, float]:
     ``paddle_mu``. Missing entries fall back to the :class:`PlannerConfig`
     defaults so callers can splat the result into a config unconditionally.
     """
+    # 从 YAML 的 contact.paddle 段读取球拍恢复/切向参数；缺失项回落到 PlannerConfig 默认值，
+    # 因此返回的 dict 一定四键齐全，调用方可无条件 ** 展开进 config。
     defaults = PlannerConfig()
     out = {
         "C_r": defaults.C_r,

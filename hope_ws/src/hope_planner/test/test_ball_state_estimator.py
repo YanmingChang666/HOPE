@@ -1,5 +1,10 @@
 """Ball state estimator unit tests."""
 
+# 【中文说明】球状态估计器单元测试：验证 ①匀速运动能拟合出正确速度、②抛物 z 运动能拟合出
+#   正确竖直速度(在最新样本处求导)、③点球触底的 V 形 z 模式触发弹跳并清空缓冲、
+#   ④中心跟踪球(最低点=球半径)的局部极小也能触发清空、⑤平飞/单调下降(无局部极小)不误触发、
+#   ⑥样本不足 6 个时 ready=False。
+
 import numpy as np
 
 from hope_planner.ball_state_estimator import BallStateEstimator

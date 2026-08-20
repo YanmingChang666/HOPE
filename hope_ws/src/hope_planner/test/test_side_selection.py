@@ -10,6 +10,12 @@ convention explicit (and the doc now matches):
 plus the hysteresis stickiness relative to the previous task's side.
 """
 
+# 【中文说明】正/反手选择的边界契约测试（把实现约定钉死，防回归）：
+#   ①无历史无迟滞时的映射表——严格小于 split 取正手，等于/大于取反手（含恰好等于的边界）；
+#   ②FOREHAND=1 / BACKHAND=-1 与 RacketCommand.msg 常量一致；
+#   ③迟滞带内“粘住上一回合”的行为（需越过 split±H 才切换，边界含端点）；
+#   ④迟滞=0 时上一侧仅在“恰好落在 split 上”打破平局；⑤负迟滞被夹到 0。
+
 import pytest
 
 from hope_planner.side_selection import BACKHAND, FOREHAND, select_swing_side
