@@ -354,39 +354,45 @@ class RacketTargetCommand(CommandTerm):
         if len(wrapped) > 0:
             self._resample_command(wrapped)
 
-    # --- debug visualization: a black sphere at the ACTUAL racket contact point ---------------- #
+    # --- debug visualization: black FIXED strike target + cyan MOVING racket center ------------ #
     def _set_debug_vis_impl(self, debug_vis: bool):
-        # 【中文 —— 在球拍接触点画黑色小球】
-        # 打开开关时创建/显示一个球形 marker，关闭时隐藏。marker 只在有渲染窗口时可见：
+        # 【中文 —— 画两颗球：黑=固定击球点，青=移动拍心】
+        # 打开开关时创建/显示两个球形 marker，关闭时隐藏。marker 只在有渲染窗口时可见：
         #   * play.py / train.py 带 GUI 时能看到；
         #   * headless（无头）训练不渲染，画了也看不到（但不会报错、不影响训练）。
         # 需要在 env cfg 里把 racket_target 的 debug_vis 设为 True 才会触发这里。
         if debug_vis:
-            if not hasattr(self, "_contact_visualizer"):
-                self._contact_visualizer = VisualizationMarkers(self.cfg.contact_visualizer_cfg)
+            if not hasattr(self, "_target_visualizer"):
+                self._target_visualizer = VisualizationMarkers(self.cfg.target_visualizer_cfg)
+                self._racket_visualizer = VisualizationMarkers(self.cfg.racket_visualizer_cfg)
                 # 【中文·诊断】这行日志用来确认“可视化代码确实被加载并启用了”。
                 # 启动训练后若在控制台看到它 => 代码已生效，看不到球多半是遮挡/颜色/相机问题；
                 # 若始终看不到它 => 说明这份改动没被这台机器 import 到（多为：训练机还是旧代码，
                 # 或包不是 editable 安装 -> 需要 git 同步到训练机并 `pip install -e` 重新安装）。
-                print("[RacketTargetCommand] debug_vis ON -> 已创建黑色击球点小球 marker", flush=True)
-            self._contact_visualizer.set_visibility(True)
-        elif hasattr(self, "_contact_visualizer"):
-            self._contact_visualizer.set_visibility(False)
+                print("[RacketTargetCommand] debug_vis ON -> 已创建 黑=固定击球点 / 青=移动拍心 两个 marker", flush=True)
+            self._target_visualizer.set_visibility(True)
+            self._racket_visualizer.set_visibility(True)
+        elif hasattr(self, "_target_visualizer"):
+            self._target_visualizer.set_visibility(False)
+            self._racket_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        # 【中文】每个渲染帧把黑球移动到“当前实际拍心” racket_pos_w（由 _compute_racket_state 的
-        # 前向运动学算出的拍面中心，世界系坐标）。它逐帧跟随球拍，击球那一刻它所在的位置就是击球点，
-        # 从而可以直接肉眼对比“拍心实际到了哪” vs “采样的击球目标 racket_target_pos_w 在哪”。
-        # racket_pos_w 形状 (num_envs, 3)，每个并行环境各画一个球。
+        # 【中文】每个渲染帧更新两颗球：
+        #   黑球 -> racket_target_pos_w：本次挥拍采样的固定击球目标点，挥拍全程不动（这才是“击球点”）；
+        #   青球 -> racket_pos_w：FK 算出的实际拍心，随手臂挥动而移动。
+        # 挥拍瞬间青球若重合到黑球，说明拍心击到了目标点。两球都是 (num_envs, 3)，每个环境各画一颗。
         if not self.robot.is_initialized:
             return
-        # 【中文·诊断】只在第一次真正绘制时打印一次拍心坐标（env 0），确认坐标合理（不是 0,0,0）。
+        # 【中文·诊断】只在第一次真正绘制时打印一次坐标（env 0），确认坐标合理（不是 0,0,0）。
         if not getattr(self, "_contact_vis_logged", False):
-            p0 = self.racket_pos_w[0].tolist()
-            print(f"[RacketTargetCommand] 首帧绘制黑球 @ 拍心 env0 = "
-                  f"({p0[0]:.3f}, {p0[1]:.3f}, {p0[2]:.3f})  (若为 0,0,0 说明 FK 尚未更新)", flush=True)
+            t0 = self.racket_target_pos_w[0].tolist()
+            r0 = self.racket_pos_w[0].tolist()
+            print(f"[RacketTargetCommand] 首帧绘制 env0: 固定击球点(黑)="
+                  f"({t0[0]:.3f},{t0[1]:.3f},{t0[2]:.3f})  实际拍心(青)="
+                  f"({r0[0]:.3f},{r0[1]:.3f},{r0[2]:.3f})", flush=True)
             self._contact_vis_logged = True
-        self._contact_visualizer.visualize(self.racket_pos_w)
+        self._target_visualizer.visualize(self.racket_target_pos_w)  # 黑：固定击球点
+        self._racket_visualizer.visualize(self.racket_pos_w)         # 青：移动拍心
 
 
 def _boxes_to_tensor(per_clip, device):
@@ -441,15 +447,30 @@ class RacketTargetCommandCfg(CommandTermCfg):
     racket_pos_range_per_clip: tuple | None = None
     racket_vel_range_per_clip: tuple | None = None
 
-    # --- debug visualization: black sphere drawn at the ACTUAL racket contact point (racket_pos_w) ---
-    # 【中文】击球点可视化用的黑色小球配置。半径 0.025m（比真实乒乓球 0.02 略大，便于看清）；
-    # 颜色 (0,0,0)=纯黑。只有把上面 debug_vis 设为 True 时才会创建/显示。
-    contact_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/Command/racket_contact",
+    # --- debug visualization ---------------------------------------------------------------------
+    # 【中文】两颗小球，帮助分清“固定击球点”与“移动的球拍”：
+    #   ① 黑球 = 固定击球目标点 racket_target_pos_w：每次挥拍只采样一次，挥拍全程钉在空间里不动，
+    #            这才是“击球点”。球拍应当挥向它。
+    #   ② 青球 = 实际拍心 racket_pos_w：由 FK 每帧算出，随手臂挥动而移动（会飘是正常的）。
+    #            用它对比：挥拍瞬间青球是否重合到黑球 => 是否击到了目标点。
+    #   （若青球明显不在可见的板中心，是 G1 的 mount_offset FK 近似未标定，需要在 viewer 里微调
+    #     RacketTargetCommandCfg.mount_offset / mount_quat；否则奖励对比的“实际拍心”也会偏。）
+    # 只有把上面 debug_vis 设为 True 才会创建/显示。半径 0.025m（真实球 0.02，略大便于看清）。
+    target_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/Command/strike_target",
         markers={
-            "contact": sim_utils.SphereCfg(
+            "target": sim_utils.SphereCfg(
                 radius=0.025,
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),  # 黑=固定击球点
+            ),
+        },
+    )
+    racket_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/Command/racket_center",
+        markers={
+            "racket": sim_utils.SphereCfg(
+                radius=0.02,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.9, 0.9)),  # 青=移动拍心
             ),
         },
     )
