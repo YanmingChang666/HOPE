@@ -354,45 +354,37 @@ class RacketTargetCommand(CommandTerm):
         if len(wrapped) > 0:
             self._resample_command(wrapped)
 
-    # --- debug visualization: black FIXED strike target + cyan MOVING racket center ------------ #
+    # --- debug visualization: ONE black ball at the paddle contact point (TTRL paddle_touch style) --- #
     def _set_debug_vis_impl(self, debug_vis: bool):
-        # 【中文 —— 画两颗球：黑=固定击球点，青=移动拍心】
-        # 打开开关时创建/显示两个球形 marker，关闭时隐藏。marker 只在有渲染窗口时可见：
-        #   * play.py / train.py 带 GUI 时能看到；
-        #   * headless（无头）训练不渲染，画了也看不到（但不会报错、不影响训练）。
-        # 需要在 env cfg 里把 racket_target 的 debug_vis 设为 True 才会触发这里。
+        # 【中文 —— 参考 TTRL 的 g1_tt_config.py：把击球点画成“拍面上的固定点”】
+        # TTRL 的做法是：击球点 = 球拍刚体位姿 ⊕ 一个固定的局部偏移 paddle_local_offset，
+        # 因此那颗黑球始终钉在拍面上【同一个固定位置】（拍心），只是会随球拍一起在空间中运动。
+        # HOPE 里完全等价的量就是 racket_pos_w（= 手腕位姿 ⊕ 固定的 G1_MOUNT_OFFSET，见
+        # _compute_racket_state）。所以这里只画【一颗黑球】= racket_pos_w，对齐 TTRL 的击球点定义。
+        # marker 只在有渲染窗口时可见（play/GUI 训练）；headless 不渲染但无害。
         if debug_vis:
-            if not hasattr(self, "_target_visualizer"):
-                self._target_visualizer = VisualizationMarkers(self.cfg.target_visualizer_cfg)
-                self._racket_visualizer = VisualizationMarkers(self.cfg.racket_visualizer_cfg)
-                # 【中文·诊断】这行日志用来确认“可视化代码确实被加载并启用了”。
-                # 启动训练后若在控制台看到它 => 代码已生效，看不到球多半是遮挡/颜色/相机问题；
-                # 若始终看不到它 => 说明这份改动没被这台机器 import 到（多为：训练机还是旧代码，
-                # 或包不是 editable 安装 -> 需要 git 同步到训练机并 `pip install -e` 重新安装）。
-                print("[RacketTargetCommand] debug_vis ON -> 已创建 黑=固定击球点 / 青=移动拍心 两个 marker", flush=True)
-            self._target_visualizer.set_visibility(True)
-            self._racket_visualizer.set_visibility(True)
-        elif hasattr(self, "_target_visualizer"):
-            self._target_visualizer.set_visibility(False)
-            self._racket_visualizer.set_visibility(False)
+            if not hasattr(self, "_touch_visualizer"):
+                self._touch_visualizer = VisualizationMarkers(self.cfg.touch_visualizer_cfg)
+                # 【中文·诊断】看到这行 => 可视化代码已生效；看不到 => 改动没被这台机器 import
+                # （训练机是旧代码 / 包非 editable 安装 -> 需 git 同步并 `pip install -e`）。
+                print("[RacketTargetCommand] debug_vis ON -> 已创建 黑色击球点(拍面固定点) marker", flush=True)
+            self._touch_visualizer.set_visibility(True)
+        elif hasattr(self, "_touch_visualizer"):
+            self._touch_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        # 【中文】每个渲染帧更新两颗球：
-        #   黑球 -> racket_target_pos_w：本次挥拍采样的固定击球目标点，挥拍全程不动（这才是“击球点”）；
-        #   青球 -> racket_pos_w：FK 算出的实际拍心，随手臂挥动而移动。
-        # 挥拍瞬间青球若重合到黑球，说明拍心击到了目标点。两球都是 (num_envs, 3)，每个环境各画一颗。
+        # 【中文】每个渲染帧把黑球放到 racket_pos_w（拍面上由固定 G1_MOUNT_OFFSET 定义的击球点）。
+        # 它在拍面上的位置是固定的（永远是拍心那一点），会随球拍一起动——这与 TTRL 的黑球一致。
+        # 若黑球没有稳稳落在可见拍面中心，说明 G1_MOUNT_OFFSET 这个“固定偏移”还没标定到拍心，
+        # 调 robots/g1.py 的 G1_MOUNT_OFFSET 即可（它就是 HOPE 版的 paddle_local_offset）。
         if not self.robot.is_initialized:
             return
-        # 【中文·诊断】只在第一次真正绘制时打印一次坐标（env 0），确认坐标合理（不是 0,0,0）。
         if not getattr(self, "_contact_vis_logged", False):
-            t0 = self.racket_target_pos_w[0].tolist()
             r0 = self.racket_pos_w[0].tolist()
-            print(f"[RacketTargetCommand] 首帧绘制 env0: 固定击球点(黑)="
-                  f"({t0[0]:.3f},{t0[1]:.3f},{t0[2]:.3f})  实际拍心(青)="
-                  f"({r0[0]:.3f},{r0[1]:.3f},{r0[2]:.3f})", flush=True)
+            print(f"[RacketTargetCommand] 首帧绘制黑色击球点 env0 = "
+                  f"({r0[0]:.3f}, {r0[1]:.3f}, {r0[2]:.3f})  (拍面固定点，随拍移动)", flush=True)
             self._contact_vis_logged = True
-        self._target_visualizer.visualize(self.racket_target_pos_w)  # 黑：固定击球点
-        self._racket_visualizer.visualize(self.racket_pos_w)         # 青：移动拍心
+        self._touch_visualizer.visualize(self.racket_pos_w)   # 黑：拍面上的固定击球点
 
 
 def _boxes_to_tensor(per_clip, device):
@@ -447,30 +439,18 @@ class RacketTargetCommandCfg(CommandTermCfg):
     racket_pos_range_per_clip: tuple | None = None
     racket_vel_range_per_clip: tuple | None = None
 
-    # --- debug visualization ---------------------------------------------------------------------
-    # 【中文】两颗小球，帮助分清“固定击球点”与“移动的球拍”：
-    #   ① 黑球 = 固定击球目标点 racket_target_pos_w：每次挥拍只采样一次，挥拍全程钉在空间里不动，
-    #            这才是“击球点”。球拍应当挥向它。
-    #   ② 青球 = 实际拍心 racket_pos_w：由 FK 每帧算出，随手臂挥动而移动（会飘是正常的）。
-    #            用它对比：挥拍瞬间青球是否重合到黑球 => 是否击到了目标点。
-    #   （若青球明显不在可见的板中心，是 G1 的 mount_offset FK 近似未标定，需要在 viewer 里微调
-    #     RacketTargetCommandCfg.mount_offset / mount_quat；否则奖励对比的“实际拍心”也会偏。）
-    # 只有把上面 debug_vis 设为 True 才会创建/显示。半径 0.025m（真实球 0.02，略大便于看清）。
-    target_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/Command/strike_target",
+    # --- debug visualization: ONE black ball at the paddle contact point (TTRL paddle_touch style) ---
+    # 【中文】参考 TTRL g1_tt_config.py 的做法：击球点 = 拍面上的一个【固定局部偏移】点。
+    #   HOPE 里就是 racket_pos_w（= 手腕位姿 ⊕ 固定的 G1_MOUNT_OFFSET，等价于 TTRL 的
+    #   paddle_local_offset）。所以只画一颗黑球 = racket_pos_w。它在拍面上的位置是固定的（拍心），
+    #   随球拍一起动是正常的（TTRL 的黑球也一样）。半径 0.025m（真实球 0.02，略大便于看清）。
+    #   想改这个“固定点”落在拍上的哪里 -> 改 robots/g1.py 的 G1_MOUNT_OFFSET。
+    touch_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/Command/paddle_touch",
         markers={
-            "target": sim_utils.SphereCfg(
+            "touch": sim_utils.SphereCfg(
                 radius=0.025,
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),  # 黑=固定击球点
-            ),
-        },
-    )
-    racket_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/Command/racket_center",
-        markers={
-            "racket": sim_utils.SphereCfg(
-                radius=0.02,
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.9, 0.9)),  # 青=移动拍心
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0)),  # 黑=拍面固定击球点
             ),
         },
     )

@@ -129,7 +129,16 @@ G1_HAND_BODIES = ["left_wrist_yaw_link", "right_wrist_yaw_link"]
 ##
 G1_WRIST_BODY = "right_wrist_yaw_link"          # last actuated link of the paddle arm
 G1_RACKET_BODY = "table_tennis_racket_link"     # racket body if it survives USD import (else fallback)
-G1_MOUNT_OFFSET = (0.24, 0.0, 0.0)              # wrist_yaw -> paddle center, wrist frame (SEED — tune)
+# 击球点（拍面固定点）= 手腕位姿 ⊕ 这个固定局部偏移。它是 HOPE 版的 paddle_local_offset
+# （对应 TTRL g1_tt_config.py 的同名量），定义击球点钉在拍面上的哪一点。
+# 【由 g1_with_racket.urdf 计算，非拍脑袋 SEED】：
+#   fixed joint 手腕→拍体 table_tennis_racket_link: xyz=(0.1415,0,0), rpy=(-π,-π/2,-π)
+#   拍面(blade)中心在拍体系 ≈ (0,0,-0.037)（由 table_tennis_racket.STL 板盘几何求出）
+#   ⇒ 手腕系 offset = xyz + R(rpy)·(0,0,-0.037) = (0.179, 0, 0)  → 落在拍面中心
+# 旧 SEED 值 (0.24,0,0) 比板中心远约 6cm（落在板缘/板外），会让黑球“漂在拍外”、
+# 且奖励用的“实际拍心”也偏。注意：racket_pos_w 只进 critic/奖励，不进 actor 观测(105D)，
+# 所以改它不破坏部署契约，但要重新训练才能让策略受益。
+G1_MOUNT_OFFSET = (0.179, 0.0, 0.0)             # wrist_yaw -> 拍面中心（手腕系，URDF 计算值）
 G1_MOUNT_QUAT = (0.70710678, 0.70710678, 0.0, 0.0)  # rpy (1.5708, 0, 0): +90 deg about X (SEED — tune)
 G1_MOUNT_NORMAL_AXIS = 1                        # racket-local blade-face axis (verify after mount tuning)
 
