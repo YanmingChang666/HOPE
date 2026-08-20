@@ -6,6 +6,20 @@ landing target, using the same no-spin drag + gravity flight model as the
 trajectory predictor.
 """
 
+# =============================================================================
+# 【中文说明】球拍目标规划：由“入射球态”反解“该怎么挥拍才能把球回到目标落点”
+# -----------------------------------------------------------------------------
+#   两步反解：
+#     ① 出射速度：给定击球点 p_strike 与目标落点 p_land、期望飞行时间 delta_t，
+#        先用无阻力解析式给初值，再用有限差分牛顿迭代（含二次阻力+重力）精修出
+#        “离拍瞬间”的球速 v_outgoing（_compute_outgoing_velocity）。
+#     ② 球拍速度：沿球拍面法向 n 用恢复系数模型反解——法向满足
+#        v_out_n - v_r_n = -C_r (v_in_n - v_r_n)  ⇒  v_r_n = (v_out_n + C_r·v_in_n)/(1+C_r)。
+#        本简化模型只沿法向驱动球拍（不加切向），法向取 (v_out−v_in) 方向并强制朝对手(+x)。
+#   输出 RacketCommand：p_intercept/v_racket 会写进 ROS 消息；n_racket 是给下游 IK 的
+#   姿态提示（可转四元数，见 quaternion_utils.normal_to_quaternion），不进 wire 消息。
+# =============================================================================
+
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -73,10 +87,12 @@ class RacketTargetPlanner:
         if delta_t <= 0.0:
             raise ValueError("delta_t must be positive")
 
+        # 无阻力解析初值：抛体公式反解初速度（k=0 时即精确解，直接返回）。
         v = (p_land - p_strike) / delta_t - 0.5 * self.physics.g * delta_t
         if self.physics.k == 0.0:
             return v
 
+        # 有阻力：牛顿迭代——积分实际落点、用有限差分雅可比修正 v，直到落点误差达标。
         for _ in range(12):
             p_end, _ = self._integrate_free_flight(p_strike, v, delta_t)
             residual = p_end - p_land
@@ -125,11 +141,13 @@ class RacketTargetPlanner:
         speed is v_r_n = (v_out_n + C_r v_in_n) / (1 + C_r). The racket velocity
         is taken along n (no tangential drive in this simplified model).
         """
+        # 面法向取“速度改变量”方向（并强制朝对手 +x）；速度几乎不变则无需挥拍。
         delta_v = v_outgoing - v_incoming
         if np.linalg.norm(delta_v) < 1e-6:
             return np.zeros(3), np.array([1.0, 0.0, 0.0])
 
         n = self._opponent_facing_normal(delta_v)
+        # 把入/出射速度投影到法向，用恢复系数反解所需的球拍法向速度 v_r_n。
         v_o_n = np.dot(v_outgoing, n)
         v_i_n = np.dot(v_incoming, n)
         v_r_n = (v_o_n + C_r * v_i_n) / (1.0 + C_r)

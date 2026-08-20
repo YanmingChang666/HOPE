@@ -9,6 +9,18 @@ ball CENTROID contacts the surface at z = ball radius (0.02 m for a 40 mm ball),
 and the bounce event is interpolated to that plane within the crossing step.
 """
 
+# =============================================================================
+# 【中文说明】无旋球轨迹预测：从当前球态积分到“击球平面 x_hit”，给出落点球态
+# -----------------------------------------------------------------------------
+#   飞行模型：显式欧拉积分，加速度 a = -k|v|v + g（二次空气阻力 + 重力）。
+#   弹跳模型：对角恢复矩阵 diag(C_h, C_h, -C_v)——切向按 C_h 衰减、法向按 C_v 反弹。
+#   接触约定：球“心”落到 z=球半径 即视为触桌（与 configs/ball_physics.yaml 一致，
+#             不是 z=0 的桌面）；在跨越步内插值到该平面，弹跳/穿越都做子步插值以提精度。
+#   击球平面穿越：当球从 x>x_hit 跨到 x≤x_hit 且 vx<0 时判定命中，插值出穿越点。
+#   死球判定：穿越时若球贴桌面高度且仍在下落（没建模到弹跳、被夹在接触高度）→ 视为
+#             不可打的死球，valid=False。返回 StrikeTarget(valid) 交给上层决定是否规划。
+# =============================================================================
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -84,13 +96,14 @@ class BallTrajectoryPredictor:
         for _step in range(max_steps):
             p_prev_x = p[0]
 
+            # 一步显式欧拉：先按当前速度/加速度推进一个 dt。
             a = self._flight_acceleration(v)
             v_new = v + a * dt
             p_new = p + v * dt + 0.5 * a * dt ** 2
             t += dt
             bounce_this_step = False
 
-            # --- Bounce detection (centroid contact at z = ball radius, interpolated) ---
+            # --- 弹跳检测（球心接触面 z=球半径，跨越步内插值到接触瞬间再反弹）---
             if p_new[2] < contact_z and v_new[2] < 0.0:
                 if self._is_on_table(p_new):
                     dz = p[2] - p_new[2]
@@ -111,7 +124,7 @@ class BallTrajectoryPredictor:
                 else:
                     p_new[2] = max(p_new[2], contact_z)
 
-            # --- Hitting-plane crossing detection ---
+            # --- 击球平面穿越检测：x 从 >x_hit 跨到 ≤x_hit 且仍朝机器人(vx<0) ---
             if p_prev_x > x_hit and p_new[0] <= x_hit and v_new[0] < 0:
                 if bounce_this_step:
                     dx_arc = p_bounce[0] - p_new[0]
@@ -130,6 +143,8 @@ class BallTrajectoryPredictor:
 
                 p_cross[0] = x_hit
 
+                # 死球判定：穿越点贴桌面高度(<接触高度+3cm)且仍在下落 → 说明没建模到弹跳、
+                # 球心被夹在接触高度，是“擦桌滚落/出界”的死球，不作为可打击点(valid=False)。
                 # A crossing at table-skim height with the ball still falling
                 # means no bounce was modelled (off-table, centroid clamped at the
                 # contact height z = ball radius): the ball is effectively dead, so

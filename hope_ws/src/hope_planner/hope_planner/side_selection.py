@@ -18,6 +18,15 @@ so a ball arriving near the boundary does not flip the choice between consecutiv
 rallies. Selection happens once per ``task_id`` and is locked for that task.
 """
 
+# =============================================================================
+# 【中文说明】正/反手选择：对“预测的横向落点 y”做二元阈值判定（纯函数，易单测）
+# -----------------------------------------------------------------------------
+#   约定：crossing_y <  split_y → 正手 FOREHAND(+1)；≥ split_y → 反手 BACKHAND(-1)。
+#   迟滞 hysteresis_y>0 时，落点落在 split 附近的迟滞带内会“粘住上一回合的选择”，
+#   避免边界球在相邻回合来回翻转（need cross split±hysteresis 才切换）。
+#   每个 task_id 只判一次并锁定；由 node.py 调用。
+# =============================================================================
+
 from __future__ import annotations
 
 FOREHAND: int = 1

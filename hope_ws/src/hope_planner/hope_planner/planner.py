@@ -6,6 +6,23 @@ the fixed hitting plane, and returns the desired racket command (or None when
 there is no usable strike yet).
 """
 
+# =============================================================================
+# 【中文说明】三级流水线编排器（纯 Python，无 ROS 依赖，便于单测）
+# -----------------------------------------------------------------------------
+#   update(t, p_ball) 每来一帧球位调用一次，内部依次跑：
+#     ① BallStateEstimator     由位置流拟合出平滑的球位/球速（含弹跳分段）
+#     ② BallTrajectoryPredictor 从当前球态前向积分到击球平面 x_hit，得到落点球态
+#     ③ RacketTargetPlanner     反解“要把球打到 target_land 所需的球拍速度/法向”
+#
+#   返回 None 的三种情形（都属于“本帧没有可执行的击球”）：
+#     · 样本不足（estimator 未 ready）；
+#     · 球在远离机器人（vx≥0，不是来球）；
+#     · 预测无有效击球平面穿越（strike.valid==False，如死球/擦网出界）。
+#
+#   ball_incoming 语义：一旦拿到速度即为 True/False（vx<0=朝机器人来），供 ROS 节点
+#   判断“回合是否结束”；估计器还没速度时为 None。
+# =============================================================================
+
 from typing import Optional
 
 import numpy as np
@@ -46,6 +63,7 @@ class HOPEPlanner:
         """
         self.estimator.push(t, p_ball)
 
+        # ① 样本不足：还拟合不出稳定速度 → 本帧不出指令（incoming 也未知）。
         if not self.estimator.ready:
             self._latest_command = None
             self._latest_strike = None
@@ -54,20 +72,22 @@ class HOPEPlanner:
 
         p_est, v_est, t_est = self.estimator.estimate()
         self._latest_t = t_est
-        self._incoming = bool(v_est[0] < 0.0)
+        self._incoming = bool(v_est[0] < 0.0)   # vx<0 = 朝机器人飞来
 
-        # Only plan for a ball moving toward the robot (vx < 0).
+        # ② 只对“朝机器人来的球”(vx<0) 规划；vx≥0 表示球在远离/已被击出。
         if v_est[0] >= 0:
             self._latest_command = None
             self._latest_strike = None
             return None
 
+        # ③ 前向积分预测到击球平面；无有效穿越（死球/擦网/出界）→ 不出指令。
         strike = self.predictor.predict(p_est, v_est, t_est)
         if not strike.valid:
             self._latest_command = None
             self._latest_strike = None
             return None
 
+        # ④ 有有效击球点 → 反解球拍目标，缓存并返回。
         self._latest_strike = strike
         self._latest_command = self.target_planner.plan(strike)
         return self._latest_command

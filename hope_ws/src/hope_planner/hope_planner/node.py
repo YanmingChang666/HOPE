@@ -13,6 +13,33 @@ samples enable the velocity fit, after which commands are published directly —
 there is no readiness/validity/failure state.
 """
 
+# =============================================================================
+# 【中文说明】hope_planner 的 ROS 2 入口节点（整个规划栈的“对外接口层”）
+# -----------------------------------------------------------------------------
+# 作用：把“动捕球流”翻译成“球拍目标指令”。它本身不含算法，只做 ROS 收发 + 任务
+#       生命周期管理，真正的估计/预测/规划都委托给纯 Python 的 HOPEPlanner。
+#
+# 数据流：
+#   /poses (geometry_msgs/PoseArray, 动捕/VRPN 发布, ~180-300Hz)
+#        └─► _poses_cb ──► HOPEPlanner.update(t, p_ball)
+#                              ├─ BallStateEstimator   估计球的平滑位置/速度
+#                              ├─ BallTrajectoryPredictor 预测到击球平面 x_hit 的落点
+#                              └─ RacketTargetPlanner   反解球拍目标位姿/速度
+#        └─► RacketCommand (hope_msgs/RacketCommand) 发布到 /racket/command
+#
+# 任务生命周期（关键设计）：
+#   · 每来一个“新的来球”→ 新 task_id（+1），task_revision 归零；
+#   · 击球前每次重算 → 同一 task_id、task_revision 递增（细化预测）；
+#   · swing_side（正手/反手）在一个 task_id 内只判一次并锁定，避免同一回合抖动切换；
+#   · 球被击出/远离 → 结束当前 task（下一个来球开新 task_id）。
+#
+# QoS 设计：
+#   · 球流用 BEST_EFFORT + depth=1（只关心最新帧，丢旧帧不重传，低延迟）；
+#   · 命令用 RELIABLE + depth=10（下游执行器不能丢指令，需可靠送达）。
+#
+# 坐标系：全部为世界系（+x 向前/朝对手，+y 向左，+z 向上；米、秒）。
+# =============================================================================
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseArray
@@ -129,13 +156,16 @@ class HOPEPlannerNode(Node):
         )
 
     def _poses_cb(self, msg: PoseArray) -> None:
+        # 球流回调（每帧动捕都会触发）。PoseArray 里没有名字，用 ball_pose_index 取球所在槽位。
         if len(msg.poses) <= self._ball_index:
             return
+        # 时间戳来自消息头（秒+纳秒），供速度拟合与 time_to_strike 计算使用。
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         pose = msg.poses[self._ball_index]
         p_ball = np.array([pose.position.x, pose.position.y, pose.position.z])
 
-        # Feed every sample to the estimator, but rate-limit the solve.
+        # 每一帧都喂给估计器（不丢帧，保证速度拟合窗口密度），但“预测+规划”这套较重的
+        # 求解按 solve_period_s 限频（≤50Hz）以省算力：限频窗口内只 push、直接返回。
         if (self._solve_period > 0.0 and self._last_solve_t is not None
                 and 0.0 <= (t - self._last_solve_t) < self._solve_period):
             self.planner.estimator.push(t, p_ball)
@@ -152,19 +182,21 @@ class HOPEPlannerNode(Node):
             return
 
         if cmd is None:
-            # Ball struck / moving away -> end the active task; next incoming
-            # ball starts a fresh task_id.
+            # 无可用击球目标。若明确判定“球在远离”（ball_incoming==False），
+            # 说明已击出/回合结束 → 关闭当前 task，下一个来球会开新的 task_id。
             if self.planner.ball_incoming is False:
                 self._task_active = False
             return
 
         if not self._task_active:
+            # 新回合的第一条有效指令：开新 task_id，选定并锁定正/反手（本回合内不再改）。
             self._task_id = (self._task_id + 1) % _TASK_ID_WRAP
             self._task_revision = 0
             self._locked_side = self._select_side(float(cmd.p_intercept[1]))
             self._prev_side = self._locked_side
             self._task_active = True
         else:
+            # 同一回合的后续细化：task_id 不变，仅递增 revision（下游据此识别是同一目标的更新）。
             self._task_revision = (self._task_revision + 1) % _REVISION_WRAP
 
         self._publish(cmd, msg.header)
